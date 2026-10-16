@@ -1,0 +1,8 @@
+# textdomain: mcl_spectator
+Flying speed: @1%=
+<player>=
+Teleport to another player while in spectator mode=
+You must be in spectator mode to use this command.=
+Player @1 is not online.=
+You cannot spectate yourself.=
+Now spectating @1.=

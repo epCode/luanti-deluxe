@@ -1,0 +1,5 @@
+# textdomain: mclx_core
+River Water Source=
+River water has the same properties as water.=
+River Water=
+Flowing River Water=

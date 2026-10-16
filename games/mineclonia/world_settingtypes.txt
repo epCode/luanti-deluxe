@@ -1,0 +1,34 @@
+# World options, shown by the main menu's Create World and Edit World
+# dialogs and stored in the world's world.mt (see doc/menu_customization.md
+# in the engine). Mineclonia reads them in mcl_init/world_settings.lua.
+
+# Survival: search for resources, craft, gain levels, health and hunger.
+# Hardcore: like Survival, locked at the hardest difficulty, one life only.
+# Creative: unlimited resources, free flying, destroy blocks instantly.
+mcl_game_mode (Game Mode) enum survival survival,hardcore,creative
+
+# Peaceful: no hostile mobs, health regenerates, never hungry.
+# Easy, Normal, Hard: hostile mobs deal more damage, starving hurts more.
+#    Requires: !mcl_game_mode=hardcore
+mcl_difficulty (Difficulty) enum normal peaceful,easy,normal,hard
+
+# Commands like /gamemode and /time for the host.
+#    Requires: !mcl_game_mode=hardcore
+mcl_allow_cheats (Allow Cheats) bool true
+
+# A chest with some starting items near the spawn point.
+#    Requires: !mcl_game_mode=hardcore
+mcl_bonus_chest (Bonus Chest) bool false
+
+[Game Rules]
+
+mcl_keepInventory (Keep inventory after death) bool false
+mcl_doTileDrops (Drop blocks when they are mined) bool true
+mobs_drop_items (Mobs drop items when they die) bool true
+mobs_griefing (Mobs can change and destroy blocks) bool true
+mcl_explosions_griefing (Explosions destroy blocks) bool true
+enable_fire (Fire spreads and burns blocks) bool true
+mcl_doWeatherCycle (Weather changes over time) bool true
+mcl_showDeathMessages (Announce player deaths in chat) bool true
+mcl_showAdvancementMessages (Announce advancements in chat) bool true
+mcl_playersSleepingPercentage (Sleeping players needed to skip the night, %) int 100 0 1000

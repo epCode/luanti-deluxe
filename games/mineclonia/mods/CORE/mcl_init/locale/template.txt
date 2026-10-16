@@ -1,0 +1,31 @@
+# textdomain: mcl_init
+Outdated Client version detected!=
+Do not show again=
+Leave Server=
+Ignore=
+You are connecting with an unsupported client. This will generally not keep you from playing the game but you should expect some visual issues, particularly with mobs and certain items.@n@nTo enjoy the best mineclonia experience use a minetest/luanti client of version 5.9.0 or greater.=
+Keep inventory after death=
+Drop blocks when they are mined=
+Mobs drop items when they die=
+Mobs can change and destroy blocks=
+Explosions destroy blocks=
+Weather changes over time=
+Announce player deaths in chat=
+Announce advancements in chat=
+Percentage of players who must sleep to skip the night=
+Fire spreads and burns blocks=
+@1 @= @2 (changes apply when the world is next loaded)=
+@1 @= @2=
+[<rule> [<value>]]=
+List, query or change the game rules of this world=
+Unknown game rule: @1=
+This command requires server privileges to run.=
+Invalid value for @1. Use true or false.=
+Invalid value for @1. Use a whole number from @2 to @3.=
+Game rule updated.=
+[<difficulty>]=
+Set or query the gameplay difficulty=
+Difficulty: @1=
+The difficulty of a Hardcore world is locked to hard.=
+Failed to set difficulty @1.@nValid values: @2=
+Difficulty set to @1.=

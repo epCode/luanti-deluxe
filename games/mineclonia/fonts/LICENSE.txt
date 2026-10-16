@@ -1,0 +1,2 @@
+Minecraftia-Regular.ttf: "Minecraftia" 2.0 by Andrew Tyler (http://andrewtyler.net),
+licensed under Creative Commons Attribution-ShareAlike (as stated in the font file).
