@@ -1,0 +1,93 @@
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+
+#pragma once
+#include <cassert>
+#include "config.h"
+#include "irrlichttypes.h"
+
+/*
+	Lower level lighting stuff
+*/
+
+// This directly sets the range of light.
+// Actually this is not the real maximum, and this is not the brightest, the
+// brightest is LIGHT_SUN.
+// If changed, this constant as defined in builtin/game/constants.lua must
+// also be changed.
+#define LIGHT_MAX 14
+// Light is stored as 4 bits, thus 15 is the maximum.
+// This brightness is reserved for sunlight
+#define LIGHT_SUN 15
+
+/*
+	Light bank layout.
+
+	Classic layout (default): the day bank holds max(sunlight, artificial light)
+	and the night bank holds artificial light only.
+
+	Separate sky light layout (game.conf `separate_sky_light = true`): the day
+	bank holds sky light only and the night bank holds block (artificial) light
+	only, like Minecraft's sky and block light. A light source may then emit
+	LIGHT_SUN, as the night bank never carries sunlight.
+	MapNode::getLight(LIGHTBANK_DAY, ...) keeps reporting max(sky, block) so
+	gameplay code and the classic renderer see the same values as before; the
+	light propagation code and the Minecraft renderer read the raw banks.
+
+	Set once by the server from its game, and by a client from the server's
+	announcement before any map data is used.
+*/
+extern bool g_separate_sky_light;
+
+// Brightest light a node may emit
+inline u8 max_light_source()
+{
+	return g_separate_sky_light ? LIGHT_SUN : LIGHT_MAX;
+}
+
+#if IS_CLIENT_BUILD
+
+/**
+ * \internal
+ *
+ * \warning DO NOT USE this directly; it is here simply so that decode_light()
+ * can be inlined.
+ *
+ * Array size is #LIGHT_SUN
+ *
+ * The array is a lookup table to convert the internal representation of light
+ * (brightness) to the display brightness.
+ *
+ */
+extern const u8 *light_decode_table;
+
+// 0 <= light <= LIGHT_SUN
+// 0 <= return value <= 255
+inline u8 decode_light(u8 light)
+{
+	if (light > LIGHT_SUN)
+		light = LIGHT_SUN;
+	return light_decode_table[light];
+}
+
+// 0.0 <= light <= 1.0
+// 0.0 <= return value <= 1.0
+float decode_light_f(float light_f);
+
+// Update light value table using the specified gamma
+void set_light_curve(float gamma);
+
+#endif
+
+// 0 <= daylight_factor <= 1000
+// 0 <= lightday, lightnight <= LIGHT_SUN
+// 0 <= return value <= LIGHT_SUN
+inline u8 blend_light(u32 daylight_factor, u8 lightday, u8 lightnight)
+{
+	u32 c = 1000;
+	u32 l = ((daylight_factor * lightday + (c - daylight_factor) * lightnight)) / c;
+	if (l > LIGHT_SUN)
+		l = LIGHT_SUN;
+	return l;
+}
