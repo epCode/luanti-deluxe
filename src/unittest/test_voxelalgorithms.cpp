@@ -213,6 +213,35 @@ void TestVoxelAlgorithms::testExtendedLighting(IGameDef *gamedef)
 	UASSERTEQ(int, light_at(39, LIGHTBANK_NIGHT), 1);
 	UASSERTEQ(int, light_at(45, LIGHTBANK_DAY), LIGHT_MAX - 4);
 	UASSERTEQ(int, light_at(20, LIGHTBANK_DAY), 20);
+	// Blocks loaded from the disk format hold at most LIGHT_MAX: the light
+	// above it comes back, with or without the lamp in the block
+	constexpr u32 NODECOUNT = MAP_BLOCKSIZE * MAP_BLOCKSIZE * MAP_BLOCKSIZE;
+	for (v3s16 bp : {v3s16(-2, 0, 0), v3s16(0, 0, 0), v3s16(-1, 0, 0)}) {
+		MapBlock *block = map.getBlockNoCreateNoEx(bp);
+		UASSERT(block);
+		std::vector<MapNode> before(NODECOUNT);
+		bool clamped = false;
+		for (u32 i = 0; i < NODECOUNT; i++) {
+			v3s16 rel(i % MAP_BLOCKSIZE, i / MAP_BLOCKSIZE % MAP_BLOCKSIZE,
+					i / (MAP_BLOCKSIZE * MAP_BLOCKSIZE));
+			MapNode n = block->getNodeNoCheck(rel);
+			before[i] = n;
+			if (ndef->getLightingFlags(n).has_light) {
+				n.param1 = legacy_unpack_light(legacy_pack_light(n.param1));
+				clamped |= n.param1 != before[i].param1;
+				block->setNodeNoCheck(rel, n);
+			}
+		}
+		UASSERT(clamped);
+		std::map<v3s16, MapBlock*> modified_blocks;
+		voxalgo::restore_extended_light(&map, block, modified_blocks);
+		for (u32 i = 0; i < NODECOUNT; i++) {
+			v3s16 rel(i % MAP_BLOCKSIZE, i / MAP_BLOCKSIZE % MAP_BLOCKSIZE,
+					i / (MAP_BLOCKSIZE * MAP_BLOCKSIZE));
+			UASSERT(block->getNodeNoCheck(rel) == before[i]);
+		}
+	}
+
 	{
 		// The day bank reports max(sunlight, artificial light)
 		std::map<v3s16, MapBlock*> modified_blocks;

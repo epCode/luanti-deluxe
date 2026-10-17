@@ -11,6 +11,8 @@
 #include "cpp_api/s_node.h"
 #include "lua_api/l_object.h"
 #include "lua_api/l_item.h"
+#include "lua_api/l_base.h"
+#include "gamedef.h"
 #include "common/c_internal.h"
 #include "content/mods.h" // ModSpec
 #include "server.h" // ServerPlayingSound
@@ -1111,11 +1113,14 @@ void read_content_features(lua_State *L, ContentFeatures &f, int index)
 	// Amount of light the node emits
 	f.light_source = getintfield_default(L, index,
 			"light_source", f.light_source);
-	if (f.light_source > max_light_source()) {
+	// Light levels above max_light_source() are opt-in
+	const u8 light_source_max = getboolfield_default(L, index, "extended_light", false) ?
+			LIGHT_LIMIT : max_light_source();
+	if (f.light_source > light_source_max) {
 		warningstream << "Node " << f.name.c_str()
-			<< " had greater light_source than " << (int)max_light_source()
+			<< " had greater light_source than " << (int)light_source_max
 			<< ", it was reduced." << std::endl;
-		f.light_source = max_light_source();
+		f.light_source = light_source_max;
 	}
 	f.damage_per_second = getintfield_default(L, index,
 			"damage_per_second", f.damage_per_second);
@@ -1551,6 +1556,40 @@ NodeBox read_nodebox(lua_State *L, int index)
 }
 
 /******************************************************************************/
+// Node definitions of the script's environment, for light values in param1
+static const NodeDefManager *script_ndef(lua_State *L)
+{
+	IGameDef *gamedef = ModApiBase::getGameDef(L);
+	return gamedef ? gamedef->ndef() : nullptr;
+}
+
+u16 param1_to_lua(lua_State *L, const MapNode &n)
+{
+	const NodeDefManager *ndef = script_ndef(L);
+	if (ndef && ndef->getLightingFlags(n).has_light)
+		return legacy_pack_light(n.param1);
+	return n.param1;
+}
+
+u16 param1_from_lua(lua_State *L, u16 content, lua_Integer param1)
+{
+	const NodeDefManager *ndef = script_ndef(L);
+	if (ndef && ndef->getLightingFlags(MapNode(content)).has_light)
+		return legacy_unpack_light(param1 & 0xFF);
+	return param1 & 0xFFFF;
+}
+
+void keep_unchanged_light(lua_State *L, MapNode &n, const MapNode &replaced)
+{
+	const NodeDefManager *ndef = script_ndef(L);
+	if (!ndef)
+		return;
+	const ContentLightingFlags f = ndef->getLightingFlags(n);
+	if (f.has_light && ndef->getLightingFlags(replaced).has_light &&
+			n.param1 == legacy_unpack_light(legacy_pack_light(replaced.param1)))
+		n.param1 = replaced.param1;
+}
+
 MapNode readnode(lua_State *L, int index)
 {
 	lua_pushvalue(L, index);
@@ -1558,7 +1597,7 @@ MapNode readnode(lua_State *L, int index)
 	lua_insert(L, -2);
 	lua_call(L, 1, 3);
 	content_t content = lua_tointeger(L, -3);
-	u16 param1 = lua_tointeger(L, -2);
+	u16 param1 = param1_from_lua(L, content, lua_tointeger(L, -2));
 	u8 param2 = lua_tointeger(L, -1);
 	lua_pop(L, 3);
 	return MapNode(content, param1, param2);
@@ -1569,7 +1608,7 @@ void pushnode(lua_State *L, const MapNode &n)
 {
 	lua_rawgeti(L, LUA_REGISTRYINDEX, CUSTOM_RIDX_PUSH_NODE);
 	lua_pushinteger(L, n.getContent());
-	lua_pushinteger(L, n.getParam1());
+	lua_pushinteger(L, param1_to_lua(L, n));
 	lua_pushinteger(L, n.getParam2());
 	lua_call(L, 3, 1);
 }

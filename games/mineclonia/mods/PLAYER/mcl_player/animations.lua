@@ -614,7 +614,8 @@ end
 local function update_procedural(player, tbl, pose, control, parent, elytra, wielded)
 	local dead = player:get_hp() <= 0
 	local riptide = mcl_tridents.obj_attached_to_riptide_trident_p (player)
-	local riding = not elytra and not riptide and (parent ~= nil or tbl.attached)
+	-- A boolean: set_animation_state keeps fields that are nil
+	local riding = not elytra and not riptide and (parent ~= nil or tbl.attached == true)
 	local sleeping = tbl.animation == "lay"
 	-- In bed the player looks along the bed (mcl_beds)
 	if sleeping and not tbl.sleep_yaw then

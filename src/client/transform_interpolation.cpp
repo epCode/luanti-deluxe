@@ -157,7 +157,7 @@ f64 TransformInterpolationClock::toServerTime(u32 server_ms)
 	return t;
 }
 
-void TransformInterpolationClock::onSnapshot(f64 t, f32 send_interval)
+void TransformInterpolationClock::onSnapshot(f64 t, f32 send_interval, f64 hold)
 {
 	f64 offset = m_client_time - t;
 	if (!m_valid) {
@@ -180,6 +180,18 @@ void TransformInterpolationClock::onSnapshot(f64 t, f32 send_interval)
 	if (t <= m_newest + 1e-6)
 		return; // another object of the same server step
 
+	if (m_stalled) {
+		// Playback stopped at the newest data. If the server had send
+		// opportunities after it (the object's hold time), nothing moved
+		// in between and playback may skip ahead. Otherwise the server or
+		// the network stalled: continue from where playback stopped and
+		// catch up gradually instead of snapping ahead.
+		m_stalled = false;
+		if (hold > m_newest + 1e-4) {
+			f64 target = m_client_time - m_offset - m_delay;
+			m_render_time = std::max(m_render_time, std::min(hold, target));
+		}
+	}
 	// Once per server step: time between updates (long pauses mean that
 	// nothing moved), slow adaption to a server that runs behind real time,
 	// and slowly forgetting old jitter. The delay only changes here, so
@@ -202,19 +214,27 @@ void TransformInterpolationClock::step(f32 dtime)
 	if (!m_valid)
 		return;
 
+	const f64 prev = m_render_time;
 	f64 target = m_client_time - m_offset - m_delay;
 	f64 err = target - m_render_time;
 	if (std::fabs(err) > 0.5) {
 		m_render_time = target;
-		return;
+	} else {
+		// Run up to 10% faster or slower until the target is reached,
+		// ignoring errors below the resolution of frame and packet timing;
+		// never run backwards.
+		f64 rate = 1.0;
+		if (std::fabs(err) > 0.002)
+			rate = rangelim(1.0 + err * 2.0, 0.9, 1.1);
+		m_render_time += dtime * rate;
 	}
-	// Run up to 10% faster or slower until the target is reached, ignoring
-	// errors below the resolution of frame and packet timing; never run
-	// backwards.
-	f64 rate = 1.0;
-	if (std::fabs(err) > 0.002)
-		rate = rangelim(1.0 + err * 2.0, 0.9, 1.1);
-	m_render_time += dtime * rate;
+	// Don't play past the newest data: when updates stop (a server hitch,
+	// late packets, or nothing moving), wait for them instead of running
+	// ahead and then snapping to the late snapshots.
+	if (m_render_time > m_newest) {
+		m_render_time = std::max(m_newest, prev);
+		m_stalled = true;
+	}
 }
 
 /*

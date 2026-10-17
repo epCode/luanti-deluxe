@@ -584,6 +584,7 @@ void Server::init()
 
 	// Initialize mapgens
 	auto &servermap = m_env->getServerMap();
+	servermap.rewriteNewerFormatBlocks();
 	if (!servermap.settings_mgr.makeMapgenParams())
 		FATAL_ERROR("Couldn't create any mapgen type");
 	m_emerge->initMapgens(servermap.getMapgenParams());

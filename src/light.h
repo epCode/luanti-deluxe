@@ -89,10 +89,12 @@ inline u8 light_level(u8 stored_light)
 */
 extern bool g_separate_sky_light;
 
-// Brightest light a node may emit
+// Brightest light a node may emit, unless it opts in to extended light
+// levels (node definition field extended_light), which go up to LIGHT_LIMIT.
+// Like in Luanti without extended light levels.
 inline u8 max_light_source()
 {
-	return LIGHT_LIMIT;
+	return g_separate_sky_light ? LIGHT_SUN_LEVEL : LIGHT_MAX;
 }
 
 /*

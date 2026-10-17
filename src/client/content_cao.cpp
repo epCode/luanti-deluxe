@@ -1956,7 +1956,7 @@ void GenericCAO::processMessage(const std::string &data)
 			TransformInterpolationClock &clock = m_env->getTransformClock();
 			f64 t = clock.toServerTime(server_ms);
 			f64 hold = clock.toServerTime(hold_ms);
-			clock.onSnapshot(t, update_interval);
+			clock.onSnapshot(t, update_interval, hold);
 			if (useTransformInterpolation()) {
 				TransformSnapshot s;
 				s.time = t;

@@ -44,6 +44,20 @@ void update_block_border_lighting(Map *map, MapBlock *block,
 	std::map<v3s16, MapBlock*> &modified_blocks);
 
 /*!
+ * Restores light above LIGHT_MAX in a block that was just loaded from a
+ * format that can't hold it (it holds at most LIGHT_MAX there). Spreads the
+ * light of the block's bright light sources and of bright light at the
+ * borders of loaded neighbor blocks; as saved light is never brighter than
+ * the real one, spreading is enough.
+ *
+ * \param block the loaded block
+ * \param modified_blocks output, contains all map blocks that
+ * the function modified
+ */
+void restore_extended_light(Map *map, MapBlock *block,
+	std::map<v3s16, MapBlock*> &modified_blocks);
+
+/*!
  * Copies back nodes from a voxel manipulator
  * to the map and updates lighting.
  * For server use only.

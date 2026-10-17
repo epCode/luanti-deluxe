@@ -121,8 +121,16 @@ void read_inventory_list(lua_State *L, int tableindex,
 		Inventory *inv, const char *name,
 		IGameDef *gdef, int forcesize=-1);
 
+// Nodes as Lua sees them: param1 of nodes with light holds light values in
+// the format of Luanti without extended light levels (legacy_pack_light())
 MapNode readnode(lua_State *L, int index);
 void pushnode(lua_State *L, const MapNode &n);
+// param1 of a node for Lua, and back
+u16 param1_to_lua(lua_State *L, const MapNode &n);
+u16 param1_from_lua(lua_State *L, u16 content, lua_Integer param1);
+// Keeps the light of the node replaced by n if Lua gave the same light
+// values as it has (Lua sees them limited, see readnode())
+void keep_unchanged_light(lua_State *L, MapNode &n, const MapNode &replaced);
 
 
 void read_groups(lua_State *L, int index, ItemGroupList &result);

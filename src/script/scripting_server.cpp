@@ -70,9 +70,12 @@ ServerScripting::ServerScripting(Server* server):
 	lua_newtable(L);
 	lua_setfield(L, -2, "luaentities");
 
-	// Brightest light a node may emit
+	// Brightest light a node may emit, depends on the light bank layout
 	lua_pushinteger(L, max_light_source());
 	lua_setfield(L, -2, "LIGHT_SOURCE_MAX");
+	// Brightest light of nodes with extended_light = true
+	lua_pushinteger(L, LIGHT_LIMIT);
+	lua_setfield(L, -2, "LIGHT_EXTENDED_MAX");
 
 	// Initialize our lua_api modules
 	InitializeModApi(L, top);

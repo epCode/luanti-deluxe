@@ -141,7 +141,11 @@ local function preprocess_node(nodedef)
 		}
 	end
 
+	-- Light levels above core.LIGHT_SOURCE_MAX are opt-in, see "Light levels"
 	local light_source_max = core.LIGHT_SOURCE_MAX or core.LIGHT_MAX
+	if nodedef.extended_light and core.LIGHT_EXTENDED_MAX then
+		light_source_max = core.LIGHT_EXTENDED_MAX
+	end
 	if nodedef.light_source and nodedef.light_source > light_source_max then
 		nodedef.light_source = light_source_max
 		core.log("warning", "Node 'light_source' value exceeds maximum," ..

@@ -193,6 +193,7 @@ int LuaVoxelManip::l_set_node_at(lua_State *L)
 	LuaVoxelManip *o = checkObjectValid(L, 1);
 	v3s16 pos        = check_v3s16(L, 2);
 	MapNode n        = readnode(L, 3);
+	keep_unchanged_light(L, n, o->vm->getNodeNoExNoEmerge(pos));
 
 	lua_pushboolean(L, o->vm->setNodeNoEmerge(pos, n));
 	return 1;
@@ -239,15 +240,10 @@ int LuaVoxelManip::l_set_lighting(lua_State *L)
 
 	luaL_checktype(L, 2, LUA_TTABLE);
 
-	// A day value of 15 (LIGHT_SUN_LEVEL) is direct sunlight
-	auto read_bank = [L] (const char *name) -> u8 {
-		int v = rangelim(getintfield_default(L, 2, name, 0), 0, LIGHT_LIMIT);
-		return v;
-	};
-	u8 day = read_bank("day");
-	if (day == LIGHT_SUN_LEVEL)
-		day = LIGHT_SUN;
-	u16 light = pack_light(day, read_bank("night"));
+	// Light values as in Luanti without extended light levels
+	u16 light = pack_light(
+		legacy_light_to_stored(getintfield_default(L, 2, "day", 0) & 0x0F, true),
+		legacy_light_to_stored(getintfield_default(L, 2, "night", 0) & 0x0F, false));
 
 	MMVManip *vm = o->vm;
 
@@ -279,7 +275,8 @@ int LuaVoxelManip::l_get_light_data(lua_State *L)
 
 	for (u32 i = 0; i != volume; i++) {
 		// Do not push unintialized data to Lua
-		lua_Integer light = (vm->m_flags[i] & VOXELFLAG_NO_DATA) ? 0 : vm->m_data[i].getParam1();
+		lua_Integer light = (vm->m_flags[i] & VOXELFLAG_NO_DATA) ? 0 :
+				param1_to_lua(L, vm->m_data[i]);
 		lua_pushinteger(L, light);
 		lua_rawseti(L, -2, i + 1);
 	}
@@ -301,9 +298,11 @@ int LuaVoxelManip::l_set_light_data(lua_State *L)
 	u32 volume = vm->m_area.getVolume();
 	for (u32 i = 0; i != volume; i++) {
 		lua_rawgeti(L, 2, i + 1);
-		u16 light = lua_tointeger(L, -1);
-
-		vm->m_data[i].param1 = light;
+		MapNode &n = vm->m_data[i];
+		MapNode given(n.getContent(), param1_from_lua(L, n.getContent(), lua_tointeger(L, -1)));
+		// Unchanged values keep light above what Lua sees
+		keep_unchanged_light(L, given, n);
+		n.param1 = given.param1;
 
 		lua_pop(L, 1);
 	}

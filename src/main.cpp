@@ -1354,7 +1354,7 @@ static bool recompress_map_database(const GameParams &game_params, const Setting
 	u32 count = 0;
 	u64 last_update_time = 0;
 	volatile auto &kill = *porting::signal_handler_killstatus();
-	const u8 serialize_as_ver = SER_FMT_VER_HIGHEST_WRITE;
+	const u8 serialize_as_ver = SER_FMT_VER_DISK;
 	const s16 map_compression_level = rangelim(g_settings->getS16("map_compression_level_disk"), -1, 9);
 
 	// This is ok because the server doesn't actually run

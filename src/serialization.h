@@ -55,8 +55,12 @@
 constexpr u8 SER_FMT_VER_INVALID = 255;
 // Highest supported serialization version
 constexpr u8 SER_FMT_VER_HIGHEST_READ = 30;
-// Saved on disk version
+// Highest version written (to clients that support it)
 constexpr u8 SER_FMT_VER_HIGHEST_WRITE = 30;
+// Saved on disk version: worlds stay readable by Luanti without extended
+// light levels. Light above LIGHT_MAX is restored when blocks are loaded
+// (voxalgo::restore_extended_light()).
+constexpr u8 SER_FMT_VER_DISK = 29;
 // Lowest supported serialization version
 constexpr u8 SER_FMT_VER_LOWEST_READ = 0;
 // Lowest serialization version for writing

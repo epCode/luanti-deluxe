@@ -78,6 +78,12 @@ local function node_at(x, y, z)
 	return core.get_node(scratch_pos)
 end
 
+-- FluidState.is(FluidTags.WATER): water, flowing water or a waterlogged node
+local function water_fluid(node)
+	local liquid = core.get_node_liquid(node)
+	return liquid ~= nil and core.get_item_group(liquid, "water") ~= 0
+end
+
 -- FluidState.getHeight of water at a block: 1 below more water, 8/9 for
 -- sources and falling water, amount / 9 otherwise.  Also returns whether
 -- the block is a source, and the node.  nil if there is no water.
@@ -1051,7 +1057,7 @@ local PLAYER_DISMOUNT_POSES = {{0.6, 1.8}, {0.6, 1.5}, {0.6, 0.6}}
 -- AbstractBoat.getDismountLocationForPassenger: beside the boat in the
 -- direction the passenger faces if there is land, else on top of it.
 local function dismount_location(self, obj)
-	local pos = self.object:get_pos()
+	local pos = self._pos or self.object:get_pos()
 	local cb = obj:get_properties().collisionbox
 	local width = obj:is_player() and 0.6 or cb[4] - cb[1]
 	local yaw = obj:is_player() and obj:get_look_horizontal() or obj:get_yaw()
@@ -1350,12 +1356,29 @@ local function set_paddle_animation(self, paddling)
 	end
 end
 
+-- The boat's Minecraft position and yaw (as of its last tick).  The object
+-- shows them between the last two ticks instead (see boat:on_step); if
+-- something else moved or turned the object, that's taken over.
+local function physics_transform(self)
+	local shown = self.object:get_pos()
+	local shown_yaw = self.object:get_yaw()
+	if not self._pos or not self._shown_pos
+			or vector.distance(shown, self._shown_pos) > 0.1
+			or abs(shown_yaw - self._shown_yaw) > 1e-3 then
+		self._pos, self._old_pos = vector.copy(shown), vector.copy(shown)
+		self._yaw, self._old_yaw = shown_yaw, shown_yaw
+		self._shown_pos, self._shown_yaw = shown, shown_yaw
+		self._sent_pos = nil
+	end
+	return self._pos
+end
+
 function boat:on_step(dtime, moveresult)
 	mcl_burning.tick(self.object, dtime, self)
 	-- mcl_burning.tick may remove object immediately
 	if self._removed or not self.object:get_pos() then return end
 
-	local pos = self.object:get_pos()
+	local pos = physics_transform(self)
 
 	if touches_fire(boat_box(pos)) then
 		destroy(self, nil)
@@ -1428,13 +1451,14 @@ function boat:on_step(dtime, moveresult)
 			left = ctrl.left, right = ctrl.right,
 		}
 	end
-	local yaw = self.object:get_yaw()
-	local start_pos = vector.copy(pos)
+	local yaw = self._yaw
 	local ticks = 0
 	self._tick_time = self._tick_time + dtime
 	while self._tick_time >= TICK and ticks < MAX_TICKS_PER_STEP do
 		self._tick_time = self._tick_time - TICK
 		ticks = ticks + 1
+		self._old_pos = vector.copy(pos)
+		self._old_yaw = yaw
 		yaw = boat_tick(self, pos, yaw, input)
 		if not self._driver then
 			input = nil
@@ -1446,13 +1470,23 @@ function boat:on_step(dtime, moveresult)
 	if ticks >= MAX_TICKS_PER_STEP then
 		self._tick_time = 0
 	end
-	if ticks == 0 then
-		return
-	end
+	self._yaw = yaw
 
-	if not vector.equals(pos, start_pos) then
-		self.object:move_to(pos, true)
+	-- Shown between the last two ticks, like Minecraft's partial tick
+	-- rendering.  Server steps don't line up with the 20 Hz ticks: showing
+	-- the newest tick moved the boat by 0, 1 or 2 ticks per step, and the
+	-- client's interpolation turned that into stutter.
+	local f = self._tick_time / TICK
+	local old = self._old_pos
+	local shown = vector.new(old.x + (pos.x - old.x) * f,
+		old.y + (pos.y - old.y) * f, old.z + (pos.z - old.z) * f)
+	local turn = (yaw - self._old_yaw + math.pi) % (2 * math.pi) - math.pi
+	local shown_yaw = (self._old_yaw + turn * f) % (2 * math.pi)
+	if not vector.equals(shown, self._sent_pos or self._shown_pos) then
+		self.object:move_to(shown, true)
+		self._sent_pos = shown
 	end
+	self._shown_pos = self.object:get_pos()
 	set_paddle_animation(self, input ~= nil and self._paddling)
 
 	-- AbstractBoatRenderer: a hit boat rocks about its sideways axis
@@ -1461,7 +1495,8 @@ function boat:on_step(dtime, moveresult)
 		pitch = math.rad(math.sin(self._hurt_time) * self._hurt_time
 			* self._damage / 10 * self._hurt_dir)
 	end
-	self.object:set_rotation(vector.new(pitch, yaw, 0))
+	self.object:set_rotation(vector.new(pitch, shown_yaw, 0))
+	self._shown_yaw = self.object:get_yaw()
 	-- Moved by setting positions (the client interpolates between them)
 	self.object:set_velocity(vector.zero())
 	self.object:set_acceleration(vector.zero())
@@ -1596,6 +1631,36 @@ function mcl_boats.register_boat(name,item_def,object_properties,entity_override
 		texture = "mcl_boats_texture_" .. name .. "_boat.png"
 	end
 
+	-- Adds a boat of this item's kind
+	local function spawn_boat(pos, yaw)
+		local boat_ent = "mcl_boats:boat"
+		local chest_tex = "blank.png"
+		if itemstring:find("chest") then
+			boat_ent = "mcl_boats:chest_boat"
+			chest_tex = "mcl_chests_normal.png"
+		end
+		local boat = core.add_entity(pos, boat_ent)
+		if not boat or not boat:get_pos() then
+			return nil
+		end
+		local ent = boat:get_luaentity()
+		ent._itemstring = itemstring
+		local custom_properties = {textures = {texture, chest_tex}}
+		if object_properties and object_properties.variant == variant.RAFT then
+			custom_properties = table.merge(raft_specific_properties, custom_properties)
+			ent._variant = variant.RAFT
+			set_raft_model_offset(boat)
+		else
+			ent._variant = variant.BOAT
+		end
+		boat:set_properties(table.merge(custom_properties, object_properties or {}))
+		boat:set_yaw(yaw)
+		for k, v in pairs(entity_overrides or {}) do
+			ent[k] = v
+		end
+		return boat
+	end
+
 	core.register_craftitem(":"..itemstring, table.merge({
 		description = S(name.." Boat"),
 		_tt_help = tt_help,
@@ -1630,29 +1695,8 @@ function mcl_boats.register_boat(name,item_def,object_properties,entity_override
 			else
 				pos = vector.add(pos, vector.multiply(dir, boat_y_offset_ground))
 			end
-			local boat_ent = "mcl_boats:boat"
-			local chest_tex = "blank.png"
-			if itemstring:find("chest") then
-				boat_ent = "mcl_boats:chest_boat"
-				chest_tex = "mcl_chests_normal.png"
-			end
-			local boat = core.add_entity(pos, boat_ent)
-			if boat and boat:get_pos() then
-				local ent = boat:get_luaentity()
-				ent._itemstring = itemstring
-				local custom_properties = {textures = {texture, chest_tex}}
-				if object_properties and object_properties.variant == variant.RAFT then
-					custom_properties = table.merge(raft_specific_properties, custom_properties)
-					ent._variant = variant.RAFT
-					set_raft_model_offset(boat)
-				else
-					ent._variant = variant.BOAT
-				end
-				boat:set_properties(table.merge( custom_properties, object_properties or {}))
-				boat:set_yaw(placer:get_look_horizontal())
-				for k,v in pairs(entity_overrides or {}) do
-					ent[k] = v
-				end
+			local boat = spawn_boat(pos, placer:get_look_horizontal())
+			if boat then
 				-- BoatItem.use: at the hit location
 				if mcl_gameevent then
 					mcl_gameevent.emit("entity_place",
@@ -1664,16 +1708,30 @@ function mcl_boats.register_boat(name,item_def,object_properties,entity_override
 			end
 			return itemstack
 		end,
+		-- BoatDispenseItemBehavior: just outside the dispenser, facing
+		-- away from it, if there is water in front of it or below the air
+		-- in front of it; otherwise the boat is dispensed as an item.
 		---@diagnostic disable-next-line: unused-local
 		_on_dispense = function(stack, pos, droppos, dropnode, dropdir)
-			local below = {x=droppos.x, y=droppos.y-1, z=droppos.z}
-			local belownode = core.get_node(below)
-			-- Place boat as entity on or in water
-			if core.get_item_group(dropnode.name, "water") ~= 0 or (dropnode.name == "air" and core.get_item_group(belownode.name, "water") ~= 0) then
-				core.add_entity(droppos, "mcl_boats:boat")
+			local y_offset
+			if water_fluid(dropnode) then
+				y_offset = 1
+			elseif dropnode.name == "air"
+					and water_fluid(core.get_node(vector.offset(droppos, 0, -1, 0))) then
+				y_offset = 0
 			else
-				core.add_item(droppos, stack)
+				local item = core.add_item(droppos, stack)
+				if item then
+					item:set_velocity(vector.multiply(dropdir, 3))
+				end
+				return
 			end
+			local outside = 0.5625 + WIDTH / 2
+			-- Direction.toYRot: up and down give 270 degrees
+			local yaw = dropdir.y ~= 0 and math.rad(270) or core.dir_to_yaw(dropdir)
+			spawn_boat(vector.new(pos.x + dropdir.x * outside,
+				pos.y + dropdir.y * 1.125 + y_offset,
+				pos.z + dropdir.z * outside), yaw)
 		end,
 	},item_def or {}))
 

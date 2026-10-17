@@ -113,6 +113,10 @@ public:
 
 	void save(ModifiedState save_level) override;
 	void listAllLoadableBlocks(std::vector<v3s16> &dst);
+	/// Rewrites blocks saved in a newer format than SER_FMT_VER_DISK (by
+	/// earlier builds) in it, so that the world stays readable everywhere.
+	/// Done once per world; call before the map settings are finalized.
+	void rewriteNewerFormatBlocks();
 	void listAllLoadedBlocks(std::vector<v3s16> &dst);
 
 	MapgenParams *getMapgenParams();

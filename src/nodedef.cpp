@@ -587,7 +587,8 @@ void ContentFeatures::deSerialize(std::istream &is, u16 protocol_version)
 	light_propagates = readU8(is);
 	sunlight_propagates = readU8(is);
 	light_source = readU8(is);
-	light_source = MYMIN(light_source, max_light_source());
+	// The server limits it (extended light levels are opt-in)
+	light_source = MYMIN(light_source, LIGHT_LIMIT);
 
 	// map generation
 	is_ground_content = readU8(is);

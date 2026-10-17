@@ -593,6 +593,41 @@ void ServerMap::listAllLoadableBlocks(std::vector<v3s16> &dst)
 		m_db.dbase_ro->listAllLoadableBlocks(dst);
 }
 
+void ServerMap::rewriteNewerFormatBlocks()
+{
+	const std::string key = "map_block_format_checked";
+	std::string checked;
+	if (settings_mgr.getMapSetting(key, &checked) && checked == std::to_string(SER_FMT_VER_DISK))
+		return;
+
+	MutexAutoLock dblock(m_db.mutex);
+	std::vector<v3s16> blocks;
+	m_db.dbase->listAllLoadableBlocks(blocks);
+	u32 rewritten = 0;
+	m_db.dbase->beginSave();
+	for (v3s16 p : blocks) {
+		std::string data;
+		m_db.dbase->loadBlock(p, &data);
+		if (data.empty() || (u8)data[0] <= SER_FMT_VER_DISK)
+			continue;
+		try {
+			MapBlock block(p, m_gamedef);
+			std::istringstream iss(data, std::ios_base::binary);
+			deSerializeBlock(&block, iss);
+			saveBlock(&block, m_db.dbase, m_map_compression_level);
+			rewritten++;
+		} catch (SerializationError &e) {
+			errorstream << "Could not rewrite map block " << p << ": " << e.what() << std::endl;
+		}
+	}
+	m_db.dbase->endSave();
+	if (rewritten > 0) {
+		actionstream << "ServerMap: rewrote " << rewritten << " of " << blocks.size()
+				<< " map blocks in format " << (int)SER_FMT_VER_DISK << std::endl;
+	}
+	settings_mgr.setMapSetting(key, std::to_string(SER_FMT_VER_DISK), true);
+}
+
 void ServerMap::listAllLoadedBlocks(std::vector<v3s16> &dst)
 {
 	for (auto &sector_it : m_sectors) {
@@ -694,7 +729,7 @@ bool ServerMap::saveBlock(MapBlock *block, MapDatabase *db, int compression_leve
 	v3s16 p3d = block->getPos();
 
 	// Format used for writing
-	u8 version = SER_FMT_VER_HIGHEST_WRITE;
+	u8 version = SER_FMT_VER_DISK;
 
 	/*
 		[0] u8 serialization version
@@ -729,6 +764,11 @@ MapBlock *ServerMap::loadBlock(const std::string &blob, v3s16 p3d, bool save_aft
 	ScopeProfiler sp(g_profiler, "ServerMap: load block", SPT_AVG, PRECISION_MICRO);
 	MapBlock *block = nullptr;
 	bool created_new = false;
+
+	// Blocks saved in a newer format than the disk one (by earlier builds)
+	// are written back in it, so that the world stays readable everywhere
+	if (!blob.empty() && (u8)blob[0] > SER_FMT_VER_DISK)
+		save_after_load = true;
 
 	try {
 		v2s16 p2d(p3d.X, p3d.Z);
@@ -776,6 +816,8 @@ MapBlock *ServerMap::loadBlock(const std::string &blob, v3s16 p3d, bool save_aft
 		std::map<v3s16, MapBlock*> modified_blocks;
 		// Fix lighting if necessary
 		voxalgo::update_block_border_lighting(this, block, modified_blocks);
+		// Light above LIGHT_MAX isn't saved
+		voxalgo::restore_extended_light(this, block, modified_blocks);
 		if (!modified_blocks.empty()) {
 			MapEditEvent event;
 			event.type = MEET_OTHER;

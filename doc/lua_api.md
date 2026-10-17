@@ -198,7 +198,7 @@ The game directory can contain the following files:
         default (see `lightmap` in `set_lighting`).
       * Gameplay APIs are unaffected: `core.get_node_light` and the like
         report the same values as before. Mods reading `param1` directly see
-        the sky light alone in its day bank (see [Light levels](#light-levels)).
+        the sky light alone in its low 4 bits.
       * Maps saved with the other layout are converted when loaded. Sky light
         that was hidden by brighter artificial light becomes darkness until
         lighting there is updated (e.g. with `core.fix_light`).
@@ -1581,8 +1581,8 @@ The function of `param1` is determined by `paramtype` in node definition.
 `param1` is reserved for the engine when `paramtype != "none"`.
 
 * `paramtype = "light"`
-    * The value stores light with and without sun (the day and night banks)
-      in its lower and upper 6 bits respectively, see [Light levels](#light-levels).
+    * The value stores light with and without sun in its lower and upper 4 bits
+      respectively (see also [Light levels](#light-levels)).
     * Required by a light source node to enable spreading its light.
     * Required by the following drawtypes as they determine their visual
       brightness from their internal light value:
@@ -1601,29 +1601,6 @@ The function of `param1` is determined by `paramtype` in node definition.
 
 The function of `param2` is determined by `paramtype2` in node definition.
 `param2` is reserved for the engine when `paramtype2 != "none"`.
-
-Light levels
-------------
-
-Light levels go from `0` to `core.LIGHT_SOURCE_MAX` (`60`).
-
-* Levels up to `core.LIGHT_MAX` (`14`) are the classic ones. Brighter levels
-  reach further (light drops by 1 per node, so a `light_source` of `60` lights
-  up nodes 59 nodes away) and are rendered brighter, with diminishing steps,
-  up to about twice the brightness of level `14` at level `60`.
-* Direct sunlight is reported as level `15`. It spreads sideways as level
-  `14`, like before.
-* Light-related APIs (`core.get_node_light`, `light_source`, `glow` of
-  particles and entities, ...) use these levels. `glow` doesn't raise light
-  above level `15`.
-* In `param1` of `paramtype = "light"` nodes, the day bank (sunlight and
-  light sources, or only sky light with `separate_sky_light`) is
-  `param1 % 64` and the night bank (light sources) is
-  `math.floor(param1 / 64) % 64`. Direct sunlight is stored as `61` in the
-  day bank.
-* Map data saved by older versions, which stored 4 bits per bank, is
-  converted when loaded. When the map is sent to an older client, light
-  above `14` is sent as `14`.
 
 * `paramtype2 = "flowingliquid"`
     * Used by `drawtype = "flowingliquid"` and `liquidtype = "flowing"`
@@ -1748,6 +1725,30 @@ Light levels go from `0` to `core.LIGHT_SOURCE_MAX` (`60`).
       an arbitrary value
 
 Nodes can also contain extra data. See [Node Metadata](#node-metadata)
+
+Light levels
+------------
+
+Light levels go from `0` to `core.LIGHT_MAX` (`14`), like in Luanti without
+extended light levels. Nodes can opt in to brighter light, up to
+`core.LIGHT_EXTENDED_MAX` (`60`), by setting `extended_light = true` in their
+definition next to their `light_source`.
+
+* Brighter levels reach further (light drops by 1 per node, so a
+  `light_source` of `60` lights up nodes 59 nodes away) and are rendered
+  brighter, with diminishing steps, up to about twice the brightness of level
+  `14` at level `60`.
+* Direct sunlight is level `15` and spreads sideways as level `14`.
+* `core.get_node_light` and similar APIs report the levels,
+  so they can return more than `15` near nodes with extended light. `glow` of
+  particles and entities doesn't raise light above level `15`.
+* `param1` (`core.get_node`, `VoxelManip:get_light_data`, node callbacks...)
+  keeps the 4 bits per light bank of Luanti without extended light levels:
+  brighter light shows up as `14` there. Writing back the values a mod read
+  keeps the brighter light.
+* Worlds are saved in the format of Luanti without extended light levels,
+  which stays able to load them. Brighter light is restored when map blocks
+  are loaded. Clients without extended light levels see it as `14`.
 
 Node drawtypes
 --------------
@@ -5775,20 +5776,19 @@ Methods
 * `update_map()`: Does nothing, kept for compatibility.
 * `set_lighting(light, [p1, p2])`: Set the lighting within the `VoxelManip` to
   a uniform value.
-    * `light` is a table, `{day=<0...60>, night=<0...60>}`. A `day` value
-      of `15` is direct sunlight.
+    * `light` is a table, `{day=<0...15>, night=<0...15>}`
     * To be used only by a `VoxelManip` object from
       `core.get_mapgen_object`.
     * (`p1`, `p2`) is the area in which lighting is set, defaults to the whole
       area if left out.
 * `get_light_data([buffer])`: Gets the light data read into the
   `VoxelManip` object
-    * Returns an array (indices 1 to volume) of the `param1` values,
-      integers ranging from `0` to `4095`.
-    * For nodes with light, each value is the bitwise combination of day and
-      night light values (`0` to `60` each, `61` for direct sunlight, see
-      [Light levels](#light-levels)).
-    * `light = day + (night * 64)`
+    * Returns an array (indices 1 to volume) of integers ranging from `0` to
+      `255`.
+    * Each value is the bitwise combination of day and night light values
+      (`0` to `15` each, see [Light levels](#light-levels) about brighter
+      light).
+    * `light = day + (night * 16)`
     * If the param `buffer` is present, this table will be used to store the
       result instead.
 * `set_light_data(light_data)`: Sets the `param1` (light) contents of each node
@@ -7119,8 +7119,8 @@ Environment access
       to get the light value of a neighbor.
     * `pos`: The position where to measure the light.
     * `timeofday`: `nil` for current time, `0` for night, `0.5` for day
-    * Returns an integer in range [0, 60] or `nil`, see [Light levels](#light-levels).
-      Direct sunlight is `15`.
+    * Returns an integer in range [0, 15] or `nil`, up to `60` near nodes with
+      extended light (see [Light levels](#light-levels))
     * `nil` is returned e.g. when the map isn't loaded at `pos`
 * `core.get_natural_light(pos[, timeofday])`
     * Figures out the sunlight (or moonlight) value at pos at the given time of
@@ -7134,9 +7134,9 @@ Environment access
     * Calculates the artificial light (light from e.g. torches) value from the
       `param1` integer value.
     * `param1`: The param1 value of a `paramtype = "light"` node.
-    * Returns an integer between `0` and `60`
-    * Currently it's the same as `math.floor(param1 / 64) % 64` (see
-      [Light levels](#light-levels)), except that it ensures compatibility.
+    * Returns an integer between `0` and `15`
+    * Currently it's the same as `math.floor(param1 / 16)`, except that it
+      ensures compatibility.
 * `core.place_node(pos, node[, placer])`
     * Place node with the same effects that a player would cause
     * `placer`: The ObjectRef that places the node (optional)
@@ -10669,7 +10669,9 @@ Player properties need to be saved manually.
     -- behind, so movement and turning look smooth at any server tick rate
     -- (`dedicated_server_step`). The server then sends an update at every
     -- send opportunity in which the object moved or turned at all, instead
-    -- of only after larger changes.
+    -- of only after larger changes. When updates stop arriving (a server
+    -- hitch or late packets), playback waits for them and then catches up
+    -- gradually instead of jumping ahead.
     -- Physical objects are not predicted by the client in this mode, so the
     -- shown position is always one the server computed.
     -- Players attached to the object follow it smoothly as well.
@@ -11029,10 +11031,14 @@ Used by `core.register_node`, `core.register_craftitem`, and
     light_source = 0,
     -- When used for nodes: Defines amount of light emitted by node.
     -- Otherwise: Defines texture glow when viewed as a dropped item
-    -- Levels up to 'core.LIGHT_MAX' (14) are the classic ones, brighter
-    -- levels up to 'core.LIGHT_SOURCE_MAX' (60) reach further and look
-    -- brighter, see "Light levels".
+    -- To set the maximum, use the value 'core.LIGHT_SOURCE_MAX': 14, or 15
+    -- in games with `separate_sky_light` (see `game.conf`).
+    -- 'core.LIGHT_MAX' is always 14, the brightest light that isn't sunlight.
     -- Values above the maximum are reduced to it.
+
+    extended_light = false,
+    -- If true, 'light_source' may go up to 'core.LIGHT_EXTENDED_MAX' (60):
+    -- brighter light that reaches further, see "Light levels".
 
     -- See "Tool Capabilities" section for an example including explanation
     tool_capabilities = {

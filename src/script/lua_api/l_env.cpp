@@ -235,6 +235,7 @@ int ModApiEnv::l_swap_node(lua_State *L)
 	// parameters
 	v3s16 pos = read_v3s16(L, 1);
 	MapNode n = readnode(L, 2);
+	keep_unchanged_light(L, n, env->getMap().getNode(pos));
 	// Do it
 	bool succeeded = env->swapNode(pos, n);
 	lua_pushboolean(L, succeeded);
@@ -255,7 +256,10 @@ int ModApiEnv::l_bulk_swap_node(lua_State *L)
 	bool succeeded = true;
 	for (s32 i = 1; i <= len; i++) {
 		lua_rawgeti(L, 1, i);
-		if (!env->swapNode(read_v3s16(L, -1), n))
+		const v3s16 pos = read_v3s16(L, -1);
+		MapNode n2 = n;
+		keep_unchanged_light(L, n2, env->getMap().getNode(pos));
+		if (!env->swapNode(pos, n2))
 			succeeded = false;
 		lua_pop(L, 1);
 	}
@@ -286,7 +290,7 @@ int ModApiEnv::l_get_node_raw(lua_State *L)
 	MapNode n = env->getMap().getNode(pos, &pos_ok);
 	// Return node and pos_ok
 	lua_pushinteger(L, n.getContent());
-	lua_pushinteger(L, n.getParam1());
+	lua_pushinteger(L, param1_to_lua(L, n));
 	lua_pushinteger(L, n.getParam2());
 	lua_pushboolean(L, pos_ok);
 	return 4;

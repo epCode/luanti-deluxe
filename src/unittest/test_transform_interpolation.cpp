@@ -147,4 +147,49 @@ TEST_CASE("transform interpolation")
 		CHECK(behind > 0.0);
 		CHECK(behind < 0.2);
 	}
+
+	// 60 FPS client, server steps every 50 ms arriving at once; returns the
+	// largest playback advance in one frame after the pause, and how far
+	// playback is behind the newest data at the end
+	auto run_clock = [](bool idle) {
+		TransformInterpolationClock clock;
+		const f32 frame = 1.0f / 60.0f;
+		f64 now = 0.0, server = 0.0, prev_server = 0.0;
+		f64 last_render = -1.0, max_advance = 0.0;
+		for (int i = 0; i < 120; i++) {
+			// Step 60: a 250 ms server hitch, or (idle) 1 s in which the
+			// server ran steps but nothing moved
+			f64 gap = i == 60 ? (idle ? 1.0 : 0.25) : 0.05;
+			server += gap;
+			while (now + frame <= server) {
+				clock.step(frame);
+				now += frame;
+				CHECK(clock.getRenderTime() >= last_render);
+				if (i > 60 && last_render >= 0.0)
+					max_advance = std::max(max_advance,
+							clock.getRenderTime() - last_render);
+				last_render = clock.getRenderTime();
+			}
+			f64 hold = idle && i == 60 ? server - 0.05 : prev_server;
+			clock.onSnapshot(server, 0.05f, hold);
+			CHECK(clock.getRenderTime() <= server);
+			if (i == 60)
+				max_advance = std::max(max_advance, clock.getRenderTime() - last_render);
+			prev_server = server;
+		}
+		return std::make_pair(max_advance, server - clock.getRenderTime());
+	};
+
+	SECTION("clock waits through a server hitch instead of snapping ahead") {
+		auto [max_advance, behind] = run_clock(false);
+		// Never more than 10% faster than real time
+		CHECK(max_advance <= 1.1 / 60.0 + 1e-6);
+		CHECK(behind < 0.2);
+	}
+
+	SECTION("clock skips ahead after a pause in which nothing moved") {
+		auto [max_advance, behind] = run_clock(true);
+		CHECK(max_advance > 0.5);
+		CHECK(behind < 0.2);
+	}
 }

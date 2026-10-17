@@ -1061,6 +1061,58 @@ void finish_bulk_light_update(Map *map, mapblock_v3 minblock,
 	}
 }
 
+void restore_extended_light(Map *map, MapBlock *block,
+	std::map<v3s16, MapBlock*> &modified_blocks)
+{
+	const NodeDefManager *ndef = map->getNodeDefManager();
+	const mapblock_v3 blockpos = block->getPos();
+	thread_local ReLightQueue light_sources(0);
+
+	for (LightBank bank : banks) {
+		light_sources.clear();
+		bool any = false;
+		// Bright light sources in the block
+		relative_v3 relpos;
+		for (relpos.Z = 0; relpos.Z < MAP_BLOCKSIZE; relpos.Z++)
+		for (relpos.Y = 0; relpos.Y < MAP_BLOCKSIZE; relpos.Y++)
+		for (relpos.X = 0; relpos.X < MAP_BLOCKSIZE; relpos.X++) {
+			MapNode n = block->getNodeNoCheck(relpos);
+			ContentLightingFlags f = bank_flags(ndef, bank, n);
+			if (f.light_source <= LIGHT_MAX)
+				continue;
+			if (f.has_light && n.getLightRaw(bank, f) < f.light_source) {
+				n.setLight(bank, f.light_source, f);
+				block->setNodeNoCheck(relpos, n);
+			}
+			light_sources.push(f.light_source, relpos, blockpos, block, 6);
+			any = true;
+		}
+		// Bright light at the borders of loaded neighbors
+		for (direction d = 0; d < 6; d++) {
+			const mapblock_v3 other_pos = blockpos + neighbor_dirs[d];
+			MapBlock *other = map->getBlockNoCreateNoEx(other_pos);
+			if (!other)
+				continue;
+			// The other block's border facing this block
+			const VoxelArea &a = block_borders[5 - d];
+			for (s32 x = a.MinEdge.X; x <= a.MaxEdge.X; x++)
+			for (s32 z = a.MinEdge.Z; z <= a.MaxEdge.Z; z++)
+			for (s32 y = a.MinEdge.Y; y <= a.MaxEdge.Y; y++) {
+				const MapNode n = other->getNodeNoCheck(x, y, z);
+				const u8 light = bank_light(bank, n, bank_flags(ndef, bank, n));
+				if (light <= LIGHT_MAX || light == LIGHT_SUN)
+					continue;
+				light_sources.push(light, relative_v3(x, y, z), other_pos, other, 6);
+				any = true;
+			}
+		}
+		if (any) {
+			modified_blocks[blockpos] = block;
+			spread_light(map, ndef, bank, light_sources, modified_blocks);
+		}
+	}
+}
+
 void blit_back_with_light(Map *map, MMVManip *vm,
 	std::map<v3s16, MapBlock*> *modified_blocks)
 {

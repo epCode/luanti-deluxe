@@ -76,8 +76,9 @@ class TransformInterpolationClock
 public:
 	// Unwraps a 32-bit millisecond timestamp to server seconds.
 	f64 toServerTime(u32 server_ms);
-	// Records the arrival of a snapshot taken at server time `t`.
-	void onSnapshot(f64 t, f32 send_interval);
+	// Records the arrival of a snapshot taken at server time `t`. `hold`:
+	// the snapshot's hold time (see TransformInterpolator::push), or < 0.
+	void onSnapshot(f64 t, f32 send_interval, f64 hold = -1.0);
 	void step(f32 dtime);
 
 	bool isValid() const { return m_valid; }
@@ -98,6 +99,8 @@ private:
 	f32 m_spacing = 0.05f;   // time between server updates
 	f32 m_delay = 0.06f;
 	f64 m_render_time = 0.0;
+	// Playback reached the newest data and waits for more
+	bool m_stalled = false;
 };
 
 /*
