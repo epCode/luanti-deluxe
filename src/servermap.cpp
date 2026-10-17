@@ -3,6 +3,7 @@
 // Copyright (C) 2010-2024 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "servermap.h"
+#include "waterlogging.h"
 
 #include "map.h"
 #include "mapsector.h"
@@ -474,9 +475,9 @@ void ServerMap::addNodeAndUpdate(v3s16 p, MapNode n,
 			continue;
 		const ContentFeatures &f2 = m_nodedef->get(n2);
 		// Minecraft-model liquids are notified below
-		if (f2.liquid_model == LIQUID_MODEL_MINECRAFT && f2.isLiquid())
+		if (isMinecraftLiquidNode(n2))
 			continue;
-		if (f2.isLiquid() || n2.getContent() == CONTENT_AIR)
+		if (f2.isLiquid() || f2.isWaterlogged() || n2.getContent() == CONTENT_AIR)
 			m_transforming_liquid.push_back(p2);
 	}
 
@@ -925,8 +926,7 @@ static s8 get_max_liquid_level(NodeNeighbor nb, s8 current_max_node_level)
 void ServerMap::transforming_liquid_add(v3s16 p)
 {
 	MapNode n = getNode(p);
-	const ContentFeatures &f = m_nodedef->get(n);
-	if (f.liquid_model == LIQUID_MODEL_MINECRAFT && f.isLiquid()) {
+	if (isMinecraftLiquidNode(n)) {
 		minecraftLiquidUpdate(p, n);
 		return;
 	}
@@ -974,10 +974,23 @@ void ServerMap::transformLiquidsLocal(std::map<v3s16, MapBlock*> &modified_block
 		// can't flow into this node.
 		content_t floodable_node = CONTENT_AIR;
 		const ContentFeatures &cf = m_nodedef->get(n0);
-		if (cf.liquid_model == LIQUID_MODEL_MINECRAFT && cf.isLiquid()) {
+		if (isMinecraftLiquidNode(n0)) {
 			// Minecraft-model liquids (from mapgen, block loading or
 			// update_liquids) flow by their own ticks
-			scheduleMinecraftLiquidTick(p0, n0.getContent(), minecraftLiquidTickDelay(p0, n0));
+			scheduleMinecraftLiquidTick(p0, node_liquid_content(m_nodedef, n0),
+					minecraftLiquidTickDelay(p0, n0));
+			continue;
+		}
+		if (cf.isWaterlogged()) {
+			// A waterlogged node is a source that never changes: let the
+			// liquid flow out of it
+			for (u16 i = 1; i < 6; i++) {
+				v3s16 npos = p0 + liquid_6dirs[i];
+				MapNode nb = getNode(npos);
+				if (nb.getContent() == CONTENT_AIR || m_nodedef->get(nb).floodable ||
+						m_nodedef->get(nb).liquid_type == LIQUID_FLOWING)
+					liquid_queue.push_back(npos);
+			}
 			continue;
 		}
 		LiquidType liquid_type = cf.liquid_type;
@@ -1030,14 +1043,18 @@ void ServerMap::transformLiquidsLocal(std::map<v3s16, MapBlock*> &modified_block
 			}
 			v3s16 npos = p0 + liquid_6dirs[i];
 			NodeNeighbor nb(getNode(npos), nt, npos);
-			const ContentFeatures &cfnb = m_nodedef->get(nb.n);
-			if (nt == NEIGHBOR_UPPER && cfnb.floats)
+			if (nt == NEIGHBOR_UPPER && m_nodedef->get(nb.n).floats)
 				floating_node_above = true;
 			// Minecraft-model liquids never take part in classic flow
-			if (cfnb.liquid_model == LIQUID_MODEL_MINECRAFT && cfnb.isLiquid()) {
+			if (isMinecraftLiquidNode(nb.n)) {
 				neutrals[num_neutrals++] = nb;
 				continue;
 			}
+			// A waterlogged node counts as a source of its liquid
+			if (m_nodedef->get(nb.n).isWaterlogged())
+				nb.n = MapNode(m_nodedef->get(m_nodedef->get(nb.n)
+						.waterlogged_liquid_id).liquid_alternative_source_id);
+			const ContentFeatures &cfnb = m_nodedef->get(nb.n);
 			switch (cfnb.liquid_type) {
 				case LIQUID_NONE:
 					if (cfnb.floodable) {

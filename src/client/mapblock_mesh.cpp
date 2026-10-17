@@ -82,30 +82,34 @@ void MeshMakeData::setCrack(int crack_level, v3s16 crack_pos)
 	Calculate non-smooth lighting at interior of node.
 	Single light bank.
 */
-static u8 getInteriorLight(enum LightBank bank, MapNode n, s32 increment,
+static u16 getInteriorLight(enum LightBank bank, MapNode n, s32 increment,
 	const NodeDefManager *ndef)
 {
-	u8 light = n.getLight(bank, ndef->getLightingFlags(n));
-	light = rangelim(light + increment, 0, LIGHT_SUN);
-	return decode_light(light);
+	s32 light = n.getLight(bank, ndef->getLightingFlags(n));
+	// An increment (glow) doesn't make extended light levels
+	if (increment > 0)
+		light = MYMAX(light, MYMIN(light + increment, LIGHT_SUN_LEVEL));
+	else
+		light = MYMAX(light + increment, 0);
+	return decode_light_hdr(light);
 }
 
 /*
 	Calculate non-smooth lighting at interior of node.
 	Both light banks.
 */
-u16 getInteriorLight(MapNode n, s32 increment, const NodeDefManager *ndef)
+u32 getInteriorLight(MapNode n, s32 increment, const NodeDefManager *ndef)
 {
-	u16 day = getInteriorLight(LIGHTBANK_DAY, n, increment, ndef);
-	u16 night = getInteriorLight(LIGHTBANK_NIGHT, n, increment, ndef);
-	return day | (night << 8);
+	u32 day = getInteriorLight(LIGHTBANK_DAY, n, increment, ndef);
+	u32 night = getInteriorLight(LIGHTBANK_NIGHT, n, increment, ndef);
+	return day | (night << 16);
 }
 
 /*
 	Calculate non-smooth lighting at face of node.
 	Single light bank.
 */
-static u8 getFaceLight(enum LightBank bank, MapNode n, MapNode n2, const NodeDefManager *ndef)
+static u16 getFaceLight(enum LightBank bank, MapNode n, MapNode n2, const NodeDefManager *ndef)
 {
 	ContentLightingFlags f1 = ndef->getLightingFlags(n);
 	ContentLightingFlags f2 = ndef->getLightingFlags(n2);
@@ -123,25 +127,25 @@ static u8 getFaceLight(enum LightBank bank, MapNode n, MapNode n2, const NodeDef
 	if(light_source > light)
 		light = light_source;
 
-	return decode_light(light);
+	return decode_light_hdr(light);
 }
 
 /*
 	Calculate non-smooth lighting at face of node.
 	Both light banks.
 */
-u16 getFaceLight(MapNode n, MapNode n2, const NodeDefManager *ndef)
+u32 getFaceLight(MapNode n, MapNode n2, const NodeDefManager *ndef)
 {
-	u16 day = getFaceLight(LIGHTBANK_DAY, n, n2, ndef);
-	u16 night = getFaceLight(LIGHTBANK_NIGHT, n, n2, ndef);
-	return day | (night << 8);
+	u32 day = getFaceLight(LIGHTBANK_DAY, n, n2, ndef);
+	u32 night = getFaceLight(LIGHTBANK_NIGHT, n, n2, ndef);
+	return day | (night << 16);
 }
 
 /*
 	Calculate smooth lighting at the XYZ- corner of p.
 	Both light banks
 */
-static u16 getSmoothLightCombined(const v3s16 &p,
+static u32 getSmoothLightCombined(const v3s16 &p,
 	const std::array<v3s16,8> &dirs, MeshMakeData *data)
 {
 	const NodeDefManager *ndef = data->m_nodedef;
@@ -149,8 +153,8 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	u16 ambient_occlusion = 0;
 	u16 light_count = 0;
 	u8 light_source_max = 0;
-	u16 light_day = 0;
-	u16 light_night = 0;
+	u32 light_day = 0;
+	u32 light_night = 0;
 	bool direct_sunlight = false;
 
 	auto add_node = [&] (u8 i, bool obstructed = false) -> bool {
@@ -166,12 +170,13 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 			light_source_max = f.light_source;
 		// Check f.solidness because fast-style leaves look better this way
 		if (f.param_type == CPT_LIGHT && f.visuals->solidness != 2) {
-			u8 light_level_day = n.getLight(LIGHTBANK_DAY, f.getLightingFlags());
-			u8 light_level_night = n.getLight(LIGHTBANK_NIGHT, f.getLightingFlags());
-			if (light_level_day == LIGHT_SUN)
+			ContentLightingFlags lf = f.getLightingFlags();
+			u8 light_level_day = n.getLight(LIGHTBANK_DAY, lf);
+			u8 light_level_night = n.getLight(LIGHTBANK_NIGHT, lf);
+			if (n.isSunlit(lf))
 				direct_sunlight = true;
-			light_day += decode_light(light_level_day);
-			light_night += decode_light(light_level_night);
+			light_day += decode_light_hdr(light_level_day);
+			light_night += decode_light_hdr(light_level_night);
 			light_count++;
 		} else {
 			ambient_occlusion++;
@@ -205,18 +210,19 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 
 	// boost direct sunlight, if any
 	if (direct_sunlight)
-		light_day = 0xFF;
+		light_day = MYMAX(light_day, 0xFF);
 
 	// Boost brightness around light sources
+	const u32 light_source_brightness = decode_light_hdr(light_source_max);
 	bool skip_ambient_occlusion_day = false;
-	if (decode_light(light_source_max) >= light_day) {
-		light_day = decode_light(light_source_max);
+	if (light_source_brightness >= light_day) {
+		light_day = light_source_brightness;
 		skip_ambient_occlusion_day = true;
 	}
 
 	bool skip_ambient_occlusion_night = false;
-	if(decode_light(light_source_max) >= light_night) {
-		light_night = decode_light(light_source_max);
+	if (light_source_brightness >= light_night) {
+		light_night = light_source_brightness;
 		skip_ambient_occlusion_night = true;
 	}
 
@@ -236,13 +242,13 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 
 		if (!skip_ambient_occlusion_day)
 			light_day = rangelim(core::round32(
-					light_day * light_amount[ambient_occlusion]), 0, 255);
+					light_day * light_amount[ambient_occlusion]), 0, LIGHT_HDR_MAX);
 		if (!skip_ambient_occlusion_night)
 			light_night = rangelim(core::round32(
-					light_night * light_amount[ambient_occlusion]), 0, 255);
+					light_night * light_amount[ambient_occlusion]), 0, LIGHT_HDR_MAX);
 	}
 
-	return light_day | (light_night << 8);
+	return light_day | (light_night << 16);
 }
 
 /*
@@ -250,7 +256,7 @@ static u16 getSmoothLightCombined(const v3s16 &p,
 	Both light banks.
 	Node at p is solid, and thus the lighting is face-dependent.
 */
-u16 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &corner, MeshMakeData *data)
+u32 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &corner, MeshMakeData *data)
 {
 	return getSmoothLightTransparent(p + face_dir, corner - 2 * face_dir, data);
 }
@@ -260,7 +266,7 @@ u16 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &corn
 	Both light banks.
 	Node at p is not solid, and the lighting is not face-dependent.
 */
-u16 getSmoothLightTransparent(const v3s16 &p, const v3s16 &corner, MeshMakeData *data)
+u32 getSmoothLightTransparent(const v3s16 &p, const v3s16 &corner, MeshMakeData *data)
 {
 	const std::array<v3s16,8> dirs = {{
 		// Always shine light
@@ -288,7 +294,7 @@ void get_sunlight_color(video::SColorf *sunlight, u32 daynight_ratio)
 }
 
 void final_color_blend(video::SColor *result,
-		u16 light, u32 daynight_ratio)
+		u32 light, u32 daynight_ratio)
 {
 	video::SColorf dayLight;
 	get_sunlight_color(&dayLight, daynight_ratio);
@@ -905,15 +911,14 @@ void MapBlockMesh::consolidateTransparentBuffers()
 	m_transparent_buffers_consolidated = true;
 }
 
-video::SColor encode_light(u16 light, u8 emissive_light)
+video::SColor encode_light(u32 light, u8 emissive_light)
 {
 	// Get components
-	u32 day = (light & 0xff);
-	u32 night = (light >> 8);
-	// Add emissive light
-	night += emissive_light * 2.5f;
-	if (night > 255)
-		night = 255;
+	u32 day = (light & 0xffff);
+	u32 night = (light >> 16);
+	// Add emissive light, up to the classic maximum brightness
+	if (night < 255)
+		night = MYMIN(night + (u32)(emissive_light * 2.5f), 255U);
 	// Since we don't know if the day light is sunlight or
 	// artificial light, assume it is artificial when the night
 	// light bank is also lit.

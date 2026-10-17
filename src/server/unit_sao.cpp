@@ -145,6 +145,12 @@ void UnitSAO::sendOutdatedData()
 		m_messages_out.emplace(getId(), true, cmd);
 	}
 
+	for (u8 id : m_pending_entity_events) {
+		std::string cmd{(char)AO_CMD_ENTITY_EVENT, (char)id};
+		m_messages_out.emplace(getId(), true, cmd);
+	}
+	m_pending_entity_events.clear();
+
 	if (!m_bone_override_sent) {
 		m_bone_override_sent = true;
 		for (const auto &bone_pos : m_bone_override) {
@@ -454,7 +460,8 @@ std::string UnitSAO::generateUpdateArmorGroupsCommand() const
 
 std::string UnitSAO::generateUpdatePositionCommand(const v3f &position,
 		const v3f &velocity, const v3f &acceleration, const v3f &rotation,
-		bool do_interpolate, bool is_movement_end, f32 update_interval)
+		bool do_interpolate, bool is_movement_end, f32 update_interval,
+		u32 server_ms, u32 hold_ms)
 {
 	std::ostringstream os(std::ios::binary);
 	// command
@@ -473,7 +480,15 @@ std::string UnitSAO::generateUpdatePositionCommand(const v3f &position,
 	writeU8(os, is_movement_end);
 	// update_interval (for interpolation)
 	writeF32(os, update_interval);
+	// timestamps (for transform interpolation)
+	writeU32(os, server_ms);
+	writeU32(os, hold_ms);
 	return os.str();
+}
+
+u32 UnitSAO::getServerTimeMs() const
+{
+	return (u32)(u64)std::llround(m_env->getSimTime() * 1000.0);
 }
 
 std::string UnitSAO::generateSetPropertiesCommand(const ObjectProperties &prop) const

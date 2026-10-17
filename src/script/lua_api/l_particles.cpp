@@ -43,6 +43,26 @@ void LuaParticleParams::readTexValue(lua_State* L, ServerParticleTexture& tex)
 
 }
 
+// Reads the optional `rotation` / `rotation_tween` fields of the
+// definition table at index 1
+static void readParticleRotation(lua_State *L, CommonParticleParams &p)
+{
+	bool present = false;
+	for (const char *field : {"rotation", "rotation_tween"}) {
+		lua_getfield(L, 1, field);
+		present |= !lua_isnil(L, -1);
+		lua_pop(L, 1);
+	}
+	if (!present)
+		return;
+
+	p.rotated = true;
+	p.rotation = v3f(0.0f);
+	lua_pushvalue(L, 1);
+	LuaParticleParams::readTweenTable(L, "rotation", p.rotation);
+	lua_pop(L, 1);
+}
+
 // add_particle({...})
 int ModApiParticles::l_add_particle(lua_State *L)
 {
@@ -143,6 +163,8 @@ int ModApiParticles::l_add_particle(lua_State *L)
 		lua_getfield(L, 1, "bounce");
 		LuaParticleParams::readLuaValue(L, p.bounce);
 		lua_pop(L, 1);
+
+		readParticleRotation(L, p);
 	}
 
 	getServer(L)->spawnParticle(playername, p);
@@ -258,6 +280,7 @@ int ModApiParticles::l_add_particlespawner(lua_State *L)
 
 		p.vertical = getboolfield_default(L, 1, "vertical", p.vertical);
 		p.glow = getintfield_default(L, 1, "glow", p.glow);
+		readParticleRotation(L, p);
 
 		lua_getfield(L, 1, "texpool");
 		if (lua_istable(L, -1)) {

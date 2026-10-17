@@ -444,6 +444,16 @@ struct ContentFeatures
 	u8 drowning;
 	// Liquids flow into and replace node
 	bool floodable;
+	// Waterlogging (Minecraft's waterlogged block states).
+	// Set on a waterlogged node: the liquid source it holds. The node then
+	// acts as a source of that liquid (flow, rendering, physics).
+	std::string waterlogged_liquid;
+	content_t waterlogged_liquid_id;
+	// On a dry node: the node it turns into when the liquid is placed in
+	// it. On a waterlogged node: the node it turns into when the liquid is
+	// taken out.
+	std::string waterlogged_alternative;
+	content_t waterlogged_alternative_id;
 
 	// --- NODEBOXES ---
 
@@ -499,6 +509,14 @@ struct ContentFeatures
 		return (liquid_type != LIQUID_NONE);
 	}
 
+	bool isWaterlogged() const {
+		return waterlogged_liquid_id != CONTENT_IGNORE;
+	}
+	// Minecraft's LiquidBlockContainer: a dry node that can be waterlogged
+	// or a waterlogged node
+	bool isLiquidContainer() const {
+		return waterlogged_alternative_id != CONTENT_IGNORE;
+	}
 	bool isLiquidRender() const {
 		return (drawtype == NDT_LIQUID || drawtype == NDT_FLOWINGLIQUID);
 	}

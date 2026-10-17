@@ -172,11 +172,15 @@ public:
 
 void set_light_decode_table()
 {
-	u8 table[LIGHT_SUN + 1] = {
-		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
-		0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
-	};
-	memcpy(const_cast<u8 *>(light_decode_table), table, sizeof(table));
+	// Classic levels 0..15 in steps of 0x11, extended levels in steps of 5,
+	// sunlight like level 15
+	u16 table[LIGHT_SUN + 1];
+	for (int i = 0; i <= LIGHT_SUN_LEVEL; i++)
+		table[i] = i * 0x11;
+	for (int i = LIGHT_SUN_LEVEL + 1; i <= LIGHT_LIMIT; i++)
+		table[i] = 0xFF + (i - LIGHT_SUN_LEVEL) * 5;
+	table[LIGHT_SUN] = 0xFF;
+	memcpy(const_cast<u16 *>(light_decode_table), table, sizeof(table));
 }
 
 class TestMapblockMeshGenerator : public TestBase {
@@ -185,6 +189,7 @@ public:
 	const char *getName() override { return "TestMapblockMeshGenerator"; }
 
 	void runTests(IGameDef *gamedef) override;
+	void testLightCurve();
 	void testSimpleNode();
 	void testSurroundedNode();
 	void testInterliquidSame();
@@ -197,6 +202,7 @@ static TestMapblockMeshGenerator g_test_instance;
 
 void TestMapblockMeshGenerator::runTests(IGameDef *gamedef)
 {
+	TEST(testLightCurve);
 	set_light_decode_table();
 	TEST(testSimpleNode);
 	TEST(testSurroundedNode);
@@ -204,6 +210,41 @@ void TestMapblockMeshGenerator::runTests(IGameDef *gamedef)
 	TEST(testInterliquidDifferent);
 	TEST(testLightmapAmbientOcclusion);
 	TEST(testLightmapFluid);
+}
+
+void TestMapblockMeshGenerator::testLightCurve()
+{
+	set_light_curve(1.0f);
+
+	// Classic levels
+	UASSERTEQ(int, decode_light_hdr(0), 0);
+	UASSERTEQ(int, decode_light_hdr(LIGHT_SUN_LEVEL), 255);
+	UASSERTEQ(int, decode_light_hdr(LIGHT_SUN), 255);
+	UASSERT(decode_light_hdr(LIGHT_MAX) < 255);
+	// Extended levels get brighter with diminishing steps, up to about
+	// twice the brightness of LIGHT_MAX
+	const int max14 = decode_light_hdr(LIGHT_MAX);
+	UASSERT(std::abs(decode_light_hdr(LIGHT_LIMIT) - 2 * max14) <= 1);
+	UASSERT(decode_light_hdr(LIGHT_LIMIT) <= LIGHT_HDR_MAX);
+	for (int i = 1; i <= LIGHT_LIMIT; i++)
+		UASSERT(decode_light_hdr(i) > decode_light_hdr(i - 1));
+	for (int i = LIGHT_SUN_LEVEL + 2; i <= LIGHT_LIMIT; i++) {
+		UASSERT(decode_light_hdr(i) - decode_light_hdr(i - 1) <=
+				decode_light_hdr(i - 1) - decode_light_hdr(i - 2) + 1);
+	}
+	// decode_light() stays in the classic range
+	UASSERTEQ(int, decode_light(LIGHT_LIMIT), 255);
+	UASSERTEQ(int, decode_light(LIGHT_MAX), max14);
+
+	// Vertex colors are halved, extended light fills the rest of the range
+	UASSERTEQ(int, encode_light(255 | 255 << 16, 0).getRed(), 127);
+	UASSERTEQ(int, encode_light(255 | 0 << 16, 0).getAlpha(), 255);
+	const u32 hdr = decode_light_hdr(LIGHT_LIMIT);
+	video::SColor c = encode_light(hdr | hdr << 16, 0);
+	UASSERTEQ(int, c.getRed(), hdr / 2);
+	UASSERTEQ(int, c.getAlpha(), 0);
+	// Emissive light doesn't make extended brightness
+	UASSERTEQ(int, encode_light(250 << 16, LIGHT_MAX).getRed(), 127);
 }
 
 namespace quad {
@@ -373,7 +414,7 @@ void TestMapblockMeshGenerator::testLightmapAmbientOcclusion()
 			int kind = rnd.range(0, 9);
 			content_t c = kind < 3 ? stone : kind < 4 ? glass : CONTENT_AIR;
 			u8 sky = rnd.range(0, 15), block = rnd.range(0, 15);
-			data.m_vmanip.setNode({x, y, z}, {c, (u8)(block << 4 | sky), 0});
+			data.m_vmanip.setNode({x, y, z}, {c, pack_light(sky == 15 ? LIGHT_SUN : sky, block), 0});
 		}
 		data.m_vmanip.setNode({0, 0, 0}, {stone, 0, 0});
 
@@ -382,8 +423,8 @@ void TestMapblockMeshGenerator::testLightmapAmbientOcclusion()
 			MapNode n = data.m_vmanip.getNodeNoExNoEmerge(v3s16(mc.X, mc.Y, -mc.Z));
 			mc::State s;
 			s.solid = n.getContent() == stone;
-			s.sky = s.solid ? 0 : n.param1 & 15;
-			s.block = s.solid ? 0 : n.param1 >> 4;
+			s.sky = s.solid ? 0 : light_level(unpack_light_day(n.param1));
+			s.block = s.solid ? 0 : unpack_light_night(n.param1);
 			return s;
 		};
 		auto light_color = [&] (v3s16 p) {

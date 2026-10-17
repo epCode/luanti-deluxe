@@ -1881,6 +1881,9 @@ void Server::SendAddParticleSpawner(session_t peer_id, u16 protocol_version,
 			tex.serialize(os, protocol_version);
 		}
 
+		// appended fields (fixed rotation); ignored by older clients
+		p.serializeAppendedFields(os);
+
 		pkt.putRawString(os.str());
 	}
 
@@ -2498,7 +2501,9 @@ void Server::sendAddNode(v3s16 p, MapNode n, std::unordered_set<u16> *far_player
 	v3s16 block_pos = getNodeBlockPos(p);
 
 	NetworkPacket pkt(TOCLIENT_ADDNODE, 6 + 2 + 1 + 1 + 1);
-	pkt << p << n.param0 << n.param1 << n.param2
+	// param1 is sent as one byte (MapNode::serialize()). Clients don't use
+	// the light values in it, they relight the node themselves.
+	pkt << p << n.param0 << (u8) (n.param1 & 0xFF) << n.param2
 			<< (u8) (remove_metadata ? 0 : 1);
 	sendNodeChangePkt(pkt, block_pos, p_f, far_d_nodes, far_players);
 }

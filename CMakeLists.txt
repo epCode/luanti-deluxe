@@ -239,6 +239,17 @@ if(RUN_IN_PLACE)
 endif()
 
 set(INSTALL_DEVTEST FALSE CACHE BOOL "Install Development Test")
+set(INSTALL_MINECLONIA TRUE CACHE BOOL "Install Mineclonia (the default game)")
+
+if(INSTALL_MINECLONIA)
+	install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/games/mineclonia" DESTINATION "${SHAREDIR}/games/"
+		PATTERN ".git*" EXCLUDE
+		# Locally generated Mojang assets (see .gitignore), never install them
+		REGEX "/games/mineclonia/textures/.*\\.png$" EXCLUDE
+		REGEX "/mcl_levelgen/templates/ancient_city$" EXCLUDE
+		REGEX "/mcl_sculk/models/.*\\.obj$" EXCLUDE
+		REGEX "/mobs_mc_warden\\.glb$" EXCLUDE )
+endif()
 
 if(INSTALL_DEVTEST)
 	install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/games/devtest" DESTINATION "${SHAREDIR}/games/"

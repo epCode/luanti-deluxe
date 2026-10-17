@@ -102,6 +102,10 @@ std::string ObjectProperties::dump() const
 	os << ", nametag_see_through=" << nametag_see_through;
 	os << ", nametag_range=" << nametag_range;
 	os << ", procedural_animation=" << procedural_animation;
+	os << ", transform_interpolation=" << transform_interpolation;
+	os << ", turn_attached_players=" << turn_attached_players;
+	os << ", attached_player_yaw_limit=" << attached_player_yaw_limit;
+	os << ", liquid_mask_box=" << liquid_mask_box.MinEdge << "," << liquid_mask_box.MaxEdge;
 	return os.str();
 }
 
@@ -119,7 +123,9 @@ static inline auto tie(const ObjectProperties &o)
 	o.collideWithObjects, o.rotate_selectionbox, o.is_visible, o.makes_footstep_sound,
 	o.automatic_face_movement_dir, o.backface_culling, o.static_save, o.use_texture_alpha,
 	o.shaded, o.show_on_minimap, o.nametag_scale_z, o.step_up_mode,
-	o.nametag_see_through, o.nametag_range, o.procedural_animation
+	o.nametag_see_through, o.nametag_range, o.procedural_animation,
+	o.transform_interpolation, o.turn_attached_players,
+	o.attached_player_yaw_limit, o.liquid_mask_box
 	);
 }
 
@@ -233,6 +239,11 @@ void ObjectProperties::serialize(std::ostream &os) const
 	writeU8(os, nametag_see_through);
 	writeF32(os, nametag_range);
 	os << serializeString16(procedural_animation);
+	writeU8(os, transform_interpolation);
+	writeU8(os, turn_attached_players);
+	writeF32(os, attached_player_yaw_limit);
+	writeV3F32(os, liquid_mask_box.MinEdge);
+	writeV3F32(os, liquid_mask_box.MaxEdge);
 
 	// Add stuff only at the bottom.
 	// Never remove anything, because we don't want new versions of this!
@@ -353,6 +364,15 @@ void ObjectProperties::deSerialize(std::istream &is)
 		return;
 
 	procedural_animation = deSerializeString16(is);
+
+	if (!canRead(is))
+		return;
+
+	transform_interpolation = readU8(is);
+	turn_attached_players = readU8(is);
+	attached_player_yaw_limit = readF32(is);
+	liquid_mask_box.MinEdge = readV3F32(is);
+	liquid_mask_box.MaxEdge = readV3F32(is);
 
 	//if (!canRead(is))
 	//	return;

@@ -55,7 +55,7 @@ static constexpr content_t MAX_REGISTERED_CONTENT = CONTENT_MAX - CONTENT_MAX / 
 	Content lighting information that fits into a single byte.
 */
 struct ContentLightingFlags {
-	u8 light_source : 4;
+	u8 light_source; // 0..LIGHT_LIMIT
 	bool has_light : 1;
 	bool light_propagates : 1;
 	bool sunlight_propagates : 1;
@@ -68,7 +68,7 @@ struct ContentLightingFlags {
 	}
 	bool operator!=(const ContentLightingFlags &other) const { return !(*this == other); }
 };
-static_assert(sizeof(ContentLightingFlags) == 1, "Unexpected ContentLightingFlags size");
+static_assert(sizeof(ContentLightingFlags) == 2, "Unexpected ContentLightingFlags size");
 
 enum LightBank
 {
@@ -111,7 +111,7 @@ struct ContentFeatures;
 */
 
 
-struct alignas(u32) MapNode
+struct MapNode
 {
 	/*
 		Main content
@@ -121,12 +121,12 @@ struct alignas(u32) MapNode
 	/*
 		Misc parameter. Initialized to 0.
 		- For light_propagates() blocks, this is light intensity,
-		  stored logarithmically from 0 to LIGHT_MAX.
-		  Sunlight is LIGHT_SUN, which is LIGHT_MAX+1.
-		  - Contains 2 values, day- and night lighting. Each takes 4 bits.
-		- Uhh... well, most blocks have light or nothing in here.
+		  from 0 to LIGHT_LIMIT. Sunlight is stored as LIGHT_SUN.
+		  - Contains 2 values, day- and night lighting. Each takes 6 bits,
+		    see pack_light() in light.h.
+		- Other blocks may store values from 0 to 255 here.
 	*/
-	u8 param1;
+	u16 param1;
 
 	/*
 		The second parameter. Initialized to 0.
@@ -136,7 +136,7 @@ struct alignas(u32) MapNode
 
 	MapNode() = default;
 
-	constexpr MapNode(content_t content, u8 a_param1=0, u8 a_param2=0) noexcept
+	constexpr MapNode(content_t content, u16 a_param1=0, u8 a_param2=0) noexcept
 		: param0(content),
 		  param1(a_param1),
 		  param2(a_param2)
@@ -162,11 +162,11 @@ struct alignas(u32) MapNode
 	{
 		param0 = c;
 	}
-	u8 getParam1() const noexcept
+	u16 getParam1() const noexcept
 	{
 		return param1;
 	}
-	void setParam1(u8 p) noexcept
+	void setParam1(u16 p) noexcept
 	{
 		param1 = p;
 	}
@@ -185,12 +185,10 @@ struct alignas(u32) MapNode
 		if (!f.has_light)
 			return;
 		if (bank == LIGHTBANK_DAY) {
-			param1 &= 0xf0;
-			param1 |= a_light & 0x0f;
+			param1 = pack_light(a_light, unpack_light_night(param1));
 		} else {
 			assert(bank == LIGHTBANK_NIGHT);
-			param1 &= 0x0f;
-			param1 |= (a_light & 0x0f)<<4;
+			param1 = pack_light(unpack_light_day(param1), a_light);
 		}
 	}
 
@@ -204,27 +202,40 @@ struct alignas(u32) MapNode
 		return !f.has_light || getLight(LIGHTBANK_DAY, f) == getLight(LIGHTBANK_NIGHT, f);
 	}
 
+	/*!
+	 * Light level of the node, as reported to games:
+	 * 0 to LIGHT_LIMIT, direct sunlight being LIGHT_SUN_LEVEL.
+	 * Includes the light emitted by the node. The day bank reports
+	 * max(sunlight, artificial light).
+	 */
 	inline u8 getLight(LightBank bank, ContentLightingFlags f) const noexcept
 	{
-		u8 raw_light = getLightRaw(bank, f);
-		// With separate sky light the day bank only holds sky light;
-		// report the classic max(sunlight, artificial light) value.
-		if (bank == LIGHTBANK_DAY && g_separate_sky_light)
-			raw_light = MYMAX(raw_light, getLightRaw(LIGHTBANK_NIGHT, f));
-		return MYMAX(f.light_source, raw_light);
+		u8 light = light_level(getLightRaw(bank, f));
+		// The day bank holds only sky light with separate sky light, and
+		// direct sunlight hides brighter artificial light in it
+		if (bank == LIGHTBANK_DAY)
+			light = MYMAX(light, getLightRaw(LIGHTBANK_NIGHT, f));
+		return MYMAX(f.light_source, light);
+	}
+
+	/// Whether the node is in direct sunlight
+	inline bool isSunlit(ContentLightingFlags f) const noexcept
+	{
+		return getLightRaw(LIGHTBANK_DAY, f) == LIGHT_SUN;
 	}
 
 	/*!
-	 * Sky light of the node (Minecraft-style sky light channel).
+	 * Sky light of the node (Minecraft-style sky light channel),
+	 * 0 to LIGHT_SUN_LEVEL.
 	 * Without separate sky light storage, sky light is only known where the
 	 * day bank exceeds the night bank; elsewhere it is reported as zero.
 	 */
 	inline u8 getSkyLight(ContentLightingFlags f) const noexcept
 	{
 		u8 day = getLightRaw(LIGHTBANK_DAY, f);
-		if (g_separate_sky_light)
-			return day;
-		return day > getLightRaw(LIGHTBANK_NIGHT, f) ? day : 0;
+		if (!g_separate_sky_light && day <= getLightRaw(LIGHTBANK_NIGHT, f))
+			return 0;
+		return MYMIN(light_level(day), LIGHT_SUN_LEVEL);
 	}
 
 	/// Block (artificial) light of the node, including its own emission.
@@ -234,19 +245,20 @@ struct alignas(u32) MapNode
 	}
 
 	/*!
-	 * Returns the node's light level from param1.
+	 * Returns the node's stored light from param1 (sunlight is LIGHT_SUN).
 	 * If the node emits light, it is ignored.
 	 * \param f the ContentLightingFlags of this node.
 	 */
 	inline u8 getLightRaw(LightBank bank, ContentLightingFlags f) const noexcept
 	{
 		if(f.has_light)
-			return bank == LIGHTBANK_DAY ? param1 & 0x0f : (param1 >> 4) & 0x0f;
+			return bank == LIGHTBANK_DAY ? unpack_light_day(param1) :
+				unpack_light_night(param1);
 		return 0;
 	}
 
 	// 0 <= daylight_factor <= 1000
-	// 0 <= return value <= LIGHT_SUN
+	// 0 <= return value <= LIGHT_LIMIT
 	u8 getLightBlend(u32 daylight_factor, ContentLightingFlags f) const
 	{
 		u8 lightday = getLight(LIGHTBANK_DAY, f);
@@ -309,9 +321,13 @@ struct alignas(u32) MapNode
 	// of all nodes).
 	//   version = serialization version. Must be >= 22
 	//   content_width = the number of bytes of content per node
-	//   params_width = the number of bytes of params per node
+	//   params_width = the number of bytes of params per node,
+	//     bulkParamsWidth(version)
 	//   compressed = true to zlib-compress output
 	//   is_mono_block = if true, nodes is array of size 1
+	// Bytes of param1 and param2 per node in the bulk format: param1 is
+	// 2 bytes wide since version 30 (extended light levels)
+	static u8 bulkParamsWidth(int version) { return version >= 30 ? 3 : 2; }
 	static Buffer<u8> serializeBulk(int version,
 			const MapNode *nodes, u32 nodecount,
 			u8 content_width, u8 params_width, bool is_mono_block = false);

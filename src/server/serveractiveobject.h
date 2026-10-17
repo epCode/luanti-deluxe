@@ -173,6 +173,10 @@ public:
 	// Swings the arm once (procedural animations)
 	virtual void swingArm()
 	{}
+	// Minecraft's entity events (Level.broadcastEntityEvent), for
+	// procedural animations
+	virtual void entityEvent(u8 id)
+	{}
 
 	virtual void setBoneOverride(const std::string &bone, const BoneOverride &props)
 	{}

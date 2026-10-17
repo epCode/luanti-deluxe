@@ -64,7 +64,7 @@ void MapgenSinglenode::makeChunk(BlockMakeData *data)
 
 	// Set lighting
 	if ((flags & MG_LIGHT) && set_light == LIGHT_SUN)
-		setLighting(LIGHT_SUN, node_min, node_max);
+		setLighting(pack_light(LIGHT_SUN, 0), node_min, node_max);
 
 	this->generating = false;
 }

@@ -16,6 +16,7 @@
 #include "constants.h"
 #include "itemgroup.h"
 #include "client/tile.h"
+#include "client/transform_interpolation.h"
 #include <cassert>
 #include <memory>
 
@@ -77,6 +78,7 @@ struct MeshAnimationInfo {
 */
 
 class MinecraftPlayerAnimator;
+class MinecraftWardenAnimator;
 
 class GenericCAO : public ClientActiveObject
 {
@@ -113,6 +115,9 @@ private:
 	AnimationState m_animation_state;
 	std::unique_ptr<MinecraftPlayerAnimator> m_mc_animator;
 	bool m_mc_slim = false;
+	// procedural_animation = "minecraft_warden"
+	std::unique_ptr<MinecraftWardenAnimator> m_warden_animator;
+	void setupWardenMaterials();
 	void updateProceduralAnimation(float dtime);
 
 	// Movement
@@ -123,6 +128,23 @@ private:
 	u16 m_hp = 1;
 	SmoothTranslator<v3f> pos_translator;
 	SmoothTranslatorWrappedv3f rot_translator;
+
+	// Transform interpolation (object property transform_interpolation)
+	TransformInterpolator m_interp;
+	// visual_size transition
+	v3f m_scale_from, m_scale_shown = v3f(1.0f);
+	f32 m_scale_time = 0.0f, m_scale_duration = 0.0f;
+	// attachment position/rotation transition
+	v3f m_attach_from_pos, m_attach_shown_pos;
+	TransformQuat m_attach_from_rot, m_attach_shown_rot;
+	f32 m_attach_time = 0.0f, m_attach_duration = 0.0f;
+
+	bool useTransformInterpolation() const
+	{ return m_prop.transform_interpolation && !m_is_local_player; }
+	// Duration of the visual_size and attachment transitions
+	f32 getTransitionTime() const;
+	void applyVisualScale(v3f size);
+	void stepTransitions(float dtime);
 
 	// Spritesheet stuff
 	// TODO move into own struct
@@ -207,6 +229,12 @@ public:
 	const v3f getVelocity() const override final { return m_velocity; }
 
 	inline const v3f &getRotation() const { return m_rotation; }
+	// Rotation as currently shown (smoothed/interpolated)
+	inline const v3f &getVisualRotation() const { return rot_translator.val_current; }
+
+	// Matrix mapping scene positions (relative to the camera offset) into
+	// the [-1, 1] cube of the property liquid_mask_box; false if none.
+	bool getLiquidMask(core::matrix4 &out) const;
 
 	bool isImmortal() const;
 

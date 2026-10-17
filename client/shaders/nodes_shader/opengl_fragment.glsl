@@ -54,6 +54,47 @@ VARYING_ vec3 vNormal;
 // cameraOffset + worldPosition (for large coordinates the limits of float
 // precision must be considered).
 VARYING_ vec3 worldPosition;
+
+#if (MATERIAL_TYPE == TILE_MATERIAL_LIQUID_TRANSPARENT || MATERIAL_TYPE == TILE_MATERIAL_LIQUID_OPAQUE || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_TRANSPARENT || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_OPAQUE || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_BASIC)
+#define LIQUID_MASKS
+// Objects that keep liquids out of a box (object property liquid_mask_box,
+// e.g. boats): each matrix maps worldPosition to the box's [-1, 1] cube.
+uniform float liquidMaskCount;
+uniform mat4 liquidMask0;
+uniform mat4 liquidMask1;
+uniform mat4 liquidMask2;
+uniform mat4 liquidMask3;
+uniform mat4 liquidMask4;
+uniform mat4 liquidMask5;
+uniform mat4 liquidMask6;
+uniform mat4 liquidMask7;
+
+bool inLiquidMask(mat4 mask)
+{
+	vec3 p = (mask * vec4(worldPosition, 1.0)).xyz;
+	return all(lessThan(abs(p), vec3(1.0)));
+}
+
+bool isLiquidMasked()
+{
+	if (liquidMaskCount < 0.5) return false;
+	if (inLiquidMask(liquidMask0)) return true;
+	if (liquidMaskCount < 1.5) return false;
+	if (inLiquidMask(liquidMask1)) return true;
+	if (liquidMaskCount < 2.5) return false;
+	if (inLiquidMask(liquidMask2)) return true;
+	if (liquidMaskCount < 3.5) return false;
+	if (inLiquidMask(liquidMask3)) return true;
+	if (liquidMaskCount < 4.5) return false;
+	if (inLiquidMask(liquidMask4)) return true;
+	if (liquidMaskCount < 5.5) return false;
+	if (inLiquidMask(liquidMask5)) return true;
+	if (liquidMaskCount < 6.5) return false;
+	if (inLiquidMask(liquidMask6)) return true;
+	if (liquidMaskCount < 7.5) return false;
+	return inLiquidMask(liquidMask7);
+}
+#endif
 CENTROID_ VARYING_ lowp vec4 varColor;
 CENTROID_ VARYING_ mediump vec2 varTexCoord;
 // Conditional because 'flat' is not available on old GLSL
@@ -466,6 +507,11 @@ void main(void)
 	shadowPos = snapToTexel(shadowWorldPos, uv, vec2(textureSize(baseTexture, 0)));
 #endif
 #endif
+#endif
+
+#ifdef LIQUID_MASKS
+	if (isLiquidMasked())
+		discard;
 #endif
 
 #ifdef USE_ARRAY_TEXTURE

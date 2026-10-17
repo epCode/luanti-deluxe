@@ -26,6 +26,10 @@
 	- a different liquid below can only be flowed into if it has on_flood
 	  (lava onto water: WaterFluid.canBeReplacedWith + LavaFluid.spreadTo)
 	- LiquidBlock.shouldSpreadLiquid: the node's on_liquid_update
+	- canPassThroughWall: the collision boxes of both nodes
+	- LiquidBlockContainer / SimpleWaterloggedBlock: nodes with a
+	  waterlogged_alternative; a waterlogged node (waterlogged_liquid) holds
+	  a source of its liquid and ticks as that source
 */
 
 #include "servermap.h"
@@ -34,6 +38,7 @@
 #include "serverenvironment.h"
 #include "scripting_server.h"
 #include "voxelalgorithms.h"
+#include "waterlogging.h"
 #include "settings.h"
 #include "profiler.h"
 #include "util/directiontables.h"
@@ -115,7 +120,7 @@ public:
 	// FlowingFluid.tick
 	void tick(v3s16 pos, MapNode n)
 	{
-		const ContentFeatures &f = m_ndef->get(n);
+		const ContentFeatures &f = m_ndef->get(node_liquid_content(m_ndef, n));
 		m_source = f.liquid_alternative_source_id;
 		m_flowing = f.liquid_alternative_flowing_id;
 		const ContentFeatures &fsource = m_ndef->get(m_source);
@@ -124,19 +129,20 @@ public:
 
 		Fluid fluid = fluidAt(n);
 		if (!fluid.source) {
-			Fluid fresh = getNewLiquid(pos);
+			Fluid fresh = getNewLiquid(pos, n);
 			if (fresh.empty()) {
 				fluid = fresh;
-				setLiquidNode(pos, MapNode(CONTENT_AIR));
+				n = MapNode(CONTENT_AIR);
+				setLiquidNode(pos, n);
 			} else if (!(fresh == fluid)) {
 				fluid = fresh;
-				MapNode nn = makeNode(fresh);
-				setLiquidNode(pos, nn);
-				m_map->scheduleMinecraftLiquidTick(pos, nn.getContent(),
+				n = makeNode(fresh);
+				setLiquidNode(pos, n);
+				m_map->scheduleMinecraftLiquidTick(pos, n.getContent(),
 						m_params.tick_delay);
 			}
 		}
-		spread(pos, fluid);
+		spread(pos, n, fluid);
 	}
 
 	// Lighting, falling nodes and callbacks for everything changed
@@ -158,6 +164,7 @@ private:
 		return m_map->getNode(p);
 	}
 
+	// BlockState.getFluidState; waterlogged nodes hold a source
 	Fluid fluidAt(MapNode n) const
 	{
 		const ContentFeatures &f = m_ndef->get(n);
@@ -170,6 +177,10 @@ private:
 			fluid.type = f.liquid_alternative_source_id;
 			fluid.falling = n.param2 & LIQUID_FLOW_DOWN_MASK;
 			fluid.amount = fluid.falling ? 8 : (n.param2 & LIQUID_LEVEL_MASK);
+		} else if (f.isWaterlogged()) {
+			fluid.type = m_ndef->get(f.waterlogged_liquid_id).liquid_alternative_source_id;
+			fluid.source = true;
+			fluid.amount = 8;
 		}
 		return fluid;
 	}
@@ -184,22 +195,90 @@ private:
 		return isSame(fluid) && fluid.source;
 	}
 
+	// BlockState.getCollisionShape, cached per node state
+	const NodeShape &shapeAt(v3s16 p, MapNode n)
+	{
+		static const NodeShape empty;
+		const ContentFeatures &f = m_ndef->get(n);
+		if (!f.walkable)
+			return empty;
+		u8 neighbors = 0;
+		if (f.drawtype == NDT_NODEBOX && f.node_box.type == NODEBOX_CONNECTED)
+			neighbors = n.getNeighbors(p, m_map);
+		u32 key = n.getContent() | (u32)n.param2 << 16 | (u32)neighbors << 24;
+		auto it = m_shapes.find(key);
+		if (it != m_shapes.end())
+			return it->second;
+		return m_shapes.emplace(key, node_collision_shape(m_ndef, n, neighbors))
+				.first->second;
+	}
+
+	// FlowingFluid.canPassThroughWall: whether liquid can pass between
+	// source and the target next to it in direction dir
+	bool canPassThroughWall(v3s16 dir, v3s16 source_pos, MapNode source,
+			v3s16 target_pos, MapNode target)
+	{
+		const NodeShape &target_shape = shapeAt(target_pos, target);
+		if (target_shape.kind == NodeShape::BLOCK)
+			return false;
+		const NodeShape &source_shape = shapeAt(source_pos, source);
+		if (source_shape.kind == NodeShape::BLOCK)
+			return false;
+		if (source_shape.kind == NodeShape::EMPTY && target_shape.kind == NodeShape::EMPTY)
+			return true;
+		return !shapes_merged_face_occludes(source_shape, target_shape, dir);
+	}
+
+	// FlowingFluid.canHoldAnyFluid: air, floodable nodes, liquid nodes and
+	// liquid containers (LiquidBlockContainer)
 	bool canHoldAnyFluid(MapNode n) const
 	{
 		if (n.getContent() == CONTENT_AIR)
 			return true;
 		const ContentFeatures &f = m_ndef->get(n);
-		return f.liquid_type != LIQUID_NONE || f.floodable;
+		return f.liquid_type != LIQUID_NONE || f.floodable || f.isLiquidContainer();
 	}
 
-	bool canMaybePassThrough(MapNode n, const Fluid &fluid) const
+	// SimpleWaterloggedBlock.canPlaceLiquid: a container only takes a
+	// source of the liquid its waterlogged form holds
+	bool canPlaceLiquid(const ContentFeatures &f, const Fluid &fluid) const
 	{
-		return !isSourceBlockOfThisType(fluid) && canHoldAnyFluid(n);
+		if (!fluid.source)
+			return false;
+		const ContentFeatures &wet = f.isWaterlogged() ? f :
+				m_ndef->get(f.waterlogged_alternative_id);
+		return wet.isWaterlogged() && m_ndef->get(wet.waterlogged_liquid_id)
+				.liquid_alternative_source_id == fluid.type;
 	}
 
-	bool isWaterHole(MapNode below) const
+	// FlowingFluid.canHoldSpecificFluid
+	bool canHoldSpecificFluid(MapNode n, const Fluid &fluid) const
 	{
-		return isSame(fluidAt(below)) || canHoldAnyFluid(below);
+		const ContentFeatures &f = m_ndef->get(n);
+		return f.isLiquidContainer() ? canPlaceLiquid(f, fluid) : true;
+	}
+
+	bool canMaybePassThrough(v3s16 pos, MapNode n, v3s16 dir, v3s16 test_pos,
+			MapNode test, const Fluid &test_fluid)
+	{
+		return !isSourceBlockOfThisType(test_fluid) && canHoldAnyFluid(test) &&
+				canPassThroughWall(dir, pos, n, test_pos, test);
+	}
+
+	bool canPassThrough(v3s16 pos, MapNode n, v3s16 dir, v3s16 test_pos,
+			MapNode test, const Fluid &test_fluid)
+	{
+		return canMaybePassThrough(pos, n, dir, test_pos, test, test_fluid) &&
+				canHoldSpecificFluid(test, makeFlowing(1, false));
+	}
+
+	bool isWaterHole(v3s16 top_pos, MapNode top, v3s16 bottom_pos, MapNode bottom)
+	{
+		if (!canPassThroughWall(v3s16(0, -1, 0), top_pos, top, bottom_pos, bottom))
+			return false;
+		if (isSame(fluidAt(bottom)))
+			return true;
+		return canHoldAnyFluid(bottom) && canHoldSpecificFluid(bottom, makeFlowing(1, false));
 	}
 
 	// FluidState.canBeReplacedWith for a flow of this liquid
@@ -241,14 +320,16 @@ private:
 		return MapNode(m_flowing, 0, param2);
 	}
 
-	// FlowingFluid.getNewLiquid: what the liquid at pos should be
-	Fluid getNewLiquid(v3s16 pos)
+	// FlowingFluid.getNewLiquid: what the liquid in n at pos should be
+	Fluid getNewLiquid(v3s16 pos, MapNode n)
 	{
 		int highest = 0;
 		int sources = 0;
 		for (const v3s16 &dir : HORIZONTAL) {
-			Fluid fluid = fluidAt(getNode(pos + dir));
-			if (isSame(fluid)) {
+			v3s16 p2 = pos + dir;
+			MapNode n2 = getNode(p2);
+			Fluid fluid = fluidAt(n2);
+			if (isSame(fluid) && canPassThroughWall(dir, pos, n, p2, n2)) {
 				if (fluid.source)
 					sources++;
 				highest = std::max<int>(highest, fluid.amount);
@@ -261,7 +342,10 @@ private:
 				return makeSource();
 		}
 
-		if (isSame(fluidAt(getNode(pos + v3s16(0, 1, 0)))))
+		v3s16 above_pos = pos + v3s16(0, 1, 0);
+		MapNode above = getNode(above_pos);
+		if (isSame(fluidAt(above)) &&
+				canPassThroughWall(v3s16(0, 1, 0), pos, n, above_pos, above))
 			return makeFlowing(8, true);
 
 		int amount = highest - m_params.drop_off;
@@ -279,7 +363,7 @@ private:
 	}
 
 	// FlowingFluid.spread
-	void spread(v3s16 pos, const Fluid &fluid)
+	void spread(v3s16 pos, MapNode n, const Fluid &fluid)
 	{
 		if (fluid.empty())
 			return;
@@ -287,21 +371,22 @@ private:
 		v3s16 below_pos = pos + v3s16(0, -1, 0);
 		MapNode below = getNode(below_pos);
 		Fluid below_fluid = fluidAt(below);
-		if (canMaybePassThrough(below, below_fluid)) {
-			Fluid fresh = getNewLiquid(below_pos);
-			if (canBeReplacedWith(below, below_fluid, true)) {
+		if (canMaybePassThrough(pos, n, v3s16(0, -1, 0), below_pos, below, below_fluid)) {
+			Fluid fresh = getNewLiquid(below_pos, below);
+			if (canBeReplacedWith(below, below_fluid, true) &&
+					canHoldSpecificFluid(below, fresh)) {
 				spreadTo(below_pos, fresh);
 				if (sourceNeighborCount(pos) >= 3)
-					spreadToSides(pos, fluid);
+					spreadToSides(pos, n, fluid);
 				return;
 			}
 		}
 
-		if (fluid.source || !isWaterHole(below))
-			spreadToSides(pos, fluid);
+		if (fluid.source || !isWaterHole(pos, n, below_pos, below))
+			spreadToSides(pos, n, fluid);
 	}
 
-	void spreadToSides(v3s16 pos, const Fluid &fluid)
+	void spreadToSides(v3s16 pos, MapNode n, const Fluid &fluid)
 	{
 		int neighbor = fluid.falling ? 7 : fluid.amount - m_params.drop_off;
 		if (neighbor <= 0)
@@ -309,7 +394,7 @@ private:
 
 		Fluid spreads[4];
 		bool has_spread[4];
-		getSpread(pos, spreads, has_spread);
+		getSpread(pos, n, spreads, has_spread);
 		for (int dir : SPREAD_ORDER) {
 			if (has_spread[dir])
 				spreadTo(pos + HORIZONTAL[dir], spreads[dir]);
@@ -340,8 +425,9 @@ private:
 			auto it = m_holes.find(key(p));
 			if (it != m_holes.end())
 				return it->second;
-			getNode(p);
-			bool hole = m_ticker->isWaterHole(m_ticker->getNode(p + v3s16(0, -1, 0)));
+			MapNode n = getNode(p);
+			v3s16 below = p + v3s16(0, -1, 0);
+			bool hole = m_ticker->isWaterHole(p, n, below, m_ticker->getNode(below));
 			m_holes.emplace(key(p), hole);
 			return hole;
 		}
@@ -360,7 +446,7 @@ private:
 	};
 
 	// FlowingFluid.getSpread: the sides with the shortest way down
-	void getSpread(v3s16 pos, Fluid spreads[4], bool has_spread[4])
+	void getSpread(v3s16 pos, MapNode n, Fluid spreads[4], bool has_spread[4])
 	{
 		int lowest = 1000;
 		std::fill(has_spread, has_spread + 4, false);
@@ -370,12 +456,15 @@ private:
 			v3s16 test_pos = pos + HORIZONTAL[dir];
 			MapNode test = getNode(test_pos);
 			Fluid test_fluid = fluidAt(test);
-			if (!canMaybePassThrough(test, test_fluid))
+			if (!canMaybePassThrough(pos, n, HORIZONTAL[dir], test_pos, test, test_fluid))
 				continue;
 
-			Fluid fresh = getNewLiquid(test_pos);
+			Fluid fresh = getNewLiquid(test_pos, test);
+			if (!canHoldSpecificFluid(test, fresh))
+				continue;
+
 			int distance = context.isHole(test_pos) ? 0 :
-					getSlopeDistance(context, test_pos, 1, opposite(dir));
+					getSlopeDistance(context, test_pos, test, 1, opposite(dir));
 
 			if (distance < lowest)
 				std::fill(has_spread, has_spread + 4, false);
@@ -390,7 +479,7 @@ private:
 		}
 	}
 
-	int getSlopeDistance(SpreadContext &context, v3s16 pos, int pass, int from)
+	int getSlopeDistance(SpreadContext &context, v3s16 pos, MapNode n, int pass, int from)
 	{
 		int lowest = 1000;
 		for (int dir = 0; dir < 4; dir++) {
@@ -398,12 +487,13 @@ private:
 				continue;
 			v3s16 test_pos = pos + HORIZONTAL[dir];
 			MapNode test = context.getNode(test_pos);
-			if (!canMaybePassThrough(test, fluidAt(test)))
+			if (!canPassThrough(pos, n, HORIZONTAL[dir], test_pos, test, fluidAt(test)))
 				continue;
 			if (context.isHole(test_pos))
 				return pass;
 			if (pass < m_params.slope_find_distance) {
-				int distance = getSlopeDistance(context, test_pos, pass + 1, opposite(dir));
+				int distance = getSlopeDistance(context, test_pos, test, pass + 1,
+						opposite(dir));
 				lowest = std::min(lowest, distance);
 			}
 		}
@@ -414,9 +504,18 @@ private:
 	void spreadTo(v3s16 pos, const Fluid &fluid)
 	{
 		MapNode old = getNode(pos);
+		const ContentFeatures &fold = m_ndef->get(old);
+		if (fold.isLiquidContainer()) {
+			// SimpleWaterloggedBlock.placeLiquid
+			if (!fold.isWaterlogged() && canPlaceLiquid(fold, fluid)) {
+				MapNode wet = old;
+				wet.setContent(fold.waterlogged_alternative_id);
+				setLiquidNode(pos, wet);
+			}
+			return;
+		}
 		MapNode n = makeNode(fluid);
-		if (old.getContent() != CONTENT_AIR && m_env &&
-				m_ndef->get(old).has_on_flood &&
+		if (old.getContent() != CONTENT_AIR && m_env && fold.has_on_flood &&
 				m_env->getScriptIface()->node_on_flood(pos, old, n))
 			return;
 		setLiquidNode(pos, n);
@@ -466,6 +565,8 @@ private:
 	LiquidFlowParams m_params;
 	bool m_renewable = false;
 
+	std::unordered_map<u32, NodeShape> m_shapes;
+
 	std::vector<std::pair<v3s16, MapNode>> m_changed;
 	std::unordered_map<v3s16, size_t> m_changed_index;
 	std::vector<v3s16> m_check_for_falling;
@@ -480,27 +581,37 @@ void ServerMap::scheduleMinecraftLiquidTick(v3s16 p, content_t c, u16 delay)
 
 u16 ServerMap::minecraftLiquidTickDelay(v3s16 p, MapNode n) const
 {
-	const ContentFeatures &fsource = m_nodedef->get(
-			m_nodedef->get(n).liquid_alternative_source_id);
+	const ContentFeatures &fsource = m_nodedef->get(m_nodedef->get(
+			node_liquid_content(m_nodedef, n)).liquid_alternative_source_id);
 	return flow_params_at(fsource, p.Y).tick_delay;
 }
 
 void ServerMap::minecraftLiquidUpdate(v3s16 p, MapNode n)
 {
 	// LiquidBlock.shouldSpreadLiquid (e.g. lava next to water hardening)
-	if (m_nodedef->get(n).has_on_liquid_update && m_liquid_env &&
+	if (m_nodedef->get(n).isLiquid() && m_nodedef->get(n).has_on_liquid_update && m_liquid_env &&
 			m_liquid_env->getScriptIface()->node_on_liquid_update(p, n))
 		return;
-	scheduleMinecraftLiquidTick(p, n.getContent(), minecraftLiquidTickDelay(p, n));
+	// Waterlogged nodes tick as their liquid's source
+	scheduleMinecraftLiquidTick(p, node_liquid_content(m_nodedef, n),
+			minecraftLiquidTickDelay(p, n));
+}
+
+bool ServerMap::isMinecraftLiquidNode(MapNode n) const
+{
+	content_t c = node_liquid_content(m_nodedef, n);
+	return c != CONTENT_IGNORE && is_minecraft_liquid(m_nodedef->get(c));
 }
 
 void ServerMap::minecraftLiquidNodeChanged(v3s16 p)
 {
+	// Liquids react with LiquidBlock.onPlace / neighborChanged, waterlogged
+	// nodes with updateShape
 	for (const v3s16 &dir : UPDATE_ORDER) {
 		v3s16 p2 = p + dir;
 		bool valid;
 		MapNode n = getNode(p2, &valid);
-		if (valid && is_minecraft_liquid(m_nodedef->get(n)))
+		if (valid && isMinecraftLiquidNode(n))
 			minecraftLiquidUpdate(p2, n);
 	}
 }
@@ -538,8 +649,8 @@ void ServerMap::stepMinecraftLiquids(float dtime,
 			bool valid;
 			MapNode n = getNode(t.pos, &valid);
 			// ServerLevel.tickFluid: only if the liquid is still there
-			if (!valid || n.getContent() != t.content ||
-					!is_minecraft_liquid(m_nodedef->get(n)))
+			if (!valid || node_liquid_content(m_nodedef, n) != t.content ||
+					!isMinecraftLiquidNode(n))
 				continue;
 
 			// Unloaded neighbours would look like holes or walls: wait for them

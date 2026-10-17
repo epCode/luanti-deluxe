@@ -5,6 +5,7 @@
 
 #include <fstream>
 #include "mg_schematic.h"
+#include "waterlogging.h"
 #include "server.h"
 #include "mapgen.h"
 #include "emerge.h"
@@ -180,11 +181,16 @@ void Schematic::blitToVManip(MMVManip *vm, v3s16 p, Rotation rot, bool force_pla
 					(placement_prob <= myrand_range(1, MTSCHEM_PROB_ALWAYS)))
 					continue;
 
+				MapNode replaced = vm->m_data[vi];
 				vm->m_data[vi] = schemdata[i];
 				vm->m_data[vi].param1 = 0;
 
 				if (rot)
 					vm->m_data[vi].rotateAlongYAxis(m_ndef, rot);
+
+				// StructureTemplate.placeInWorld: placed in a liquid
+				// source, a liquid container gets waterlogged
+				waterlog_replacement(m_ndef, replaced, vm->m_data[vi]);
 			}
 		}
 		y_map++;

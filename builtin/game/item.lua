@@ -270,6 +270,13 @@ function core.item_place_node(itemstack, placer, pointed_thing, param2,
 		end
 	end
 
+	-- Placed in a liquid source, a node that can hold it gets waterlogged
+	-- (getStateForPlacement)
+	local liquid, is_source = core.get_node_liquid(oldnode)
+	if liquid and is_source then
+		newnode.name = core.get_waterlogged_node(newnode.name, liquid) or newnode.name
+	end
+
 	-- Check if the node is attached and if it can be placed there
 	local an = core.get_item_group(def.name, "attached_node")
 	if an ~= 0 and
@@ -559,8 +566,8 @@ function core.node_dig(pos, node, digger)
 		oldmetadata = core.get_meta(pos):to_table()
 	end
 
-	-- Remove node and update
-	core.remove_node(pos)
+	-- Remove node and update; a waterlogged node leaves its liquid
+	core.remove_node_keep_liquid(pos)
 
 	-- Play sound if it was done by a player
 	if diggername ~= "" and def and def.sounds and def.sounds.dug then

@@ -375,7 +375,7 @@ void push_item_definition_full(lua_State *L, const ItemDefinition &i)
 }
 
 /******************************************************************************/
-const std::array<const char *, 39> object_property_keys = {
+const std::array<const char *, 43> object_property_keys = {
 	"hp_max",
 	"breath_max",
 	"physical",
@@ -415,7 +415,11 @@ const std::array<const char *, 39> object_property_keys = {
 	"step_up_mode",
 	"nametag_see_through",
 	"nametag_range",
-	"procedural_animation"
+	"procedural_animation",
+	"transform_interpolation",
+	"turn_attached_players",
+	"attached_player_yaw_limit",
+	"liquid_mask_box"
 };
 
 /******************************************************************************/
@@ -601,6 +605,13 @@ void read_object_properties(lua_State *L, int index,
 	getboolfield(L, -1, "nametag_see_through", prop->nametag_see_through);
 	getfloatfield(L, -1, "nametag_range", prop->nametag_range);
 	getstringfield(L, -1, "procedural_animation", prop->procedural_animation);
+	getboolfield(L, -1, "transform_interpolation", prop->transform_interpolation);
+	getboolfield(L, -1, "turn_attached_players", prop->turn_attached_players);
+	getfloatfield(L, -1, "attached_player_yaw_limit", prop->attached_player_yaw_limit);
+	lua_getfield(L, -1, "liquid_mask_box");
+	if (lua_istable(L, -1))
+		prop->liquid_mask_box = read_aabb3f(L, -1, 1.0);
+	lua_pop(L, 1);
 
 	getstringfield(L, -1, "infotext", prop->infotext);
 	getboolfield(L, -1, "static_save", prop->static_save);
@@ -721,6 +732,14 @@ void push_object_properties(lua_State *L, const ObjectProperties *prop)
 	lua_setfield(L, -2, "nametag_range");
 	lua_pushlstring(L, prop->procedural_animation.c_str(), prop->procedural_animation.size());
 	lua_setfield(L, -2, "procedural_animation");
+	lua_pushboolean(L, prop->transform_interpolation);
+	lua_setfield(L, -2, "transform_interpolation");
+	lua_pushboolean(L, prop->turn_attached_players);
+	lua_setfield(L, -2, "turn_attached_players");
+	lua_pushnumber(L, prop->attached_player_yaw_limit);
+	lua_setfield(L, -2, "attached_player_yaw_limit");
+	push_aabb3f(L, prop->liquid_mask_box);
+	lua_setfield(L, -2, "liquid_mask_box");
 	lua_pushlstring(L, prop->infotext.c_str(), prop->infotext.size());
 	lua_setfield(L, -2, "infotext");
 	lua_pushboolean(L, prop->static_save);
@@ -1053,6 +1072,9 @@ void read_content_features(lua_State *L, ContentFeatures &f, int index)
 			"leveled_max", f.leveled_max);
 
 	getboolfield(L, index, "liquid_renewable", f.liquid_renewable);
+	// Waterlogging
+	getstringfield(L, index, "waterlogged_liquid", f.waterlogged_liquid);
+	getstringfield(L, index, "waterlogged_alternative", f.waterlogged_alternative);
 	{
 		auto str = getstringfield_default(L, index, "liquid_model", "classic");
 		if (!string_to_enum(ScriptApiNode::es_LiquidModel, f.liquid_model, str))
@@ -1302,6 +1324,14 @@ void push_content_features(lua_State *L, const ContentFeatures &c)
 		lua_pushstring(L, ScriptApiNode::es_LiquidModel[c.liquid_model].str);
 		lua_setfield(L, -2, "liquid_model");
 	}
+	if (!c.waterlogged_liquid.empty()) {
+		lua_pushstring(L, c.waterlogged_liquid.c_str());
+		lua_setfield(L, -2, "waterlogged_liquid");
+	}
+	if (!c.waterlogged_alternative.empty()) {
+		lua_pushstring(L, c.waterlogged_alternative.c_str());
+		lua_setfield(L, -2, "waterlogged_alternative");
+	}
 	lua_pushnumber(L, c.drowning);
 	lua_setfield(L, -2, "drowning");
 	lua_pushboolean(L, c.floodable);
@@ -1528,7 +1558,7 @@ MapNode readnode(lua_State *L, int index)
 	lua_insert(L, -2);
 	lua_call(L, 1, 3);
 	content_t content = lua_tointeger(L, -3);
-	u8 param1 = lua_tointeger(L, -2);
+	u16 param1 = lua_tointeger(L, -2);
 	u8 param2 = lua_tointeger(L, -1);
 	lua_pop(L, 3);
 	return MapNode(content, param1, param2);

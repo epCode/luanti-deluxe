@@ -84,6 +84,11 @@ public:
 	//! Gets joint count.
 	u32 getJointCount() const;
 
+	//! Global (mesh space) transformations of the joints, as of the last
+	//! animation update. Empty if the mesh has no joints.
+	const std::vector<core::matrix4> &getJointGlobalMatrices() const
+	{ return PerJoint.GlobalMatrices; }
+
 	//! Sets if the scene node should not copy the materials of the mesh but use them in a read only style.
 	/* In this way it is possible to change the materials a mesh causing all mesh scene nodes
 	referencing this mesh to change too. */

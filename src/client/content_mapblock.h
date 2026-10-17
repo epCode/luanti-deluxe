@@ -11,17 +11,18 @@
 struct MeshMakeData;
 struct MeshCollector;
 
+// Day and night brightness, 0..LIGHT_HDR_MAX (see decode_light_hdr())
 struct LightPair {
-	u8 lightDay;
-	u8 lightNight;
+	u16 lightDay;
+	u16 lightNight;
 
 	LightPair() = default;
-	explicit LightPair(u16 value) : lightDay(value & 0xff), lightNight(value >> 8) {}
-	LightPair(u8 valueA, u8 valueB) : lightDay(valueA), lightNight(valueB) {}
+	explicit LightPair(u32 value) : lightDay(value & 0xffff), lightNight(value >> 16) {}
+	LightPair(u16 valueA, u16 valueB) : lightDay(valueA), lightNight(valueB) {}
 	LightPair(float valueA, float valueB) :
-		lightDay(core::clamp(core::round32(valueA), 0, 255)),
-		lightNight(core::clamp(core::round32(valueB), 0, 255)) {}
-	operator u16() const { return lightDay | lightNight << 8; }
+		lightDay(core::clamp(core::round32(valueA), 0, LIGHT_HDR_MAX)),
+		lightNight(core::clamp(core::round32(valueB), 0, LIGHT_HDR_MAX)) {}
+	operator u32() const { return lightDay | (u32)lightNight << 16; }
 };
 
 struct LightInfo {
@@ -229,4 +230,16 @@ private:
 // common
 	void errorUnknownDrawtype();
 	void drawNode();
+	void drawNodeBody();
+
+	// Waterlogging: the liquid held by a waterlogged node is drawn like a
+	// liquid source node in the same place
+	struct {
+		bool active = false;
+		u8 full_faces = 0; // bit k: the holder covers solid_tile_dirs[k]
+	} cur_holder;
+	// The node's liquid for neighbour checks: the held liquid of a
+	// waterlogged node, the node itself otherwise
+	content_t liquidContentOf(MapNode n) const;
+	void drawWaterloggedLiquid();
 };

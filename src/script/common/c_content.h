@@ -65,7 +65,7 @@ extern struct EnumString es_SwingAnimationType[];
 extern struct EnumString es_ItemUseAnimation[];
 extern struct EnumString es_ItemHoldAnimation[];
 
-extern const std::array<const char *, 39> object_property_keys;
+extern const std::array<const char *, 43> object_property_keys;
 
 void read_content_features(lua_State *L, ContentFeatures &f, int index);
 void push_content_features(lua_State *L, const ContentFeatures &c);

@@ -8,6 +8,7 @@
 #include "util/numeric.h" // IntervalLimiter
 #include "activeobjectmgr.h" // client::ActiveObjectMgr
 #include "irr_ptr.h"
+#include "client/transform_interpolation.h"
 #include "config.h"
 #include <set>
 
@@ -146,6 +147,14 @@ public:
 	 */
 	u64 getFrameCounter() const { return m_frame_counter; }
 
+	// Playback clock of objects with transform_interpolation
+	TransformInterpolationClock &getTransformClock() { return m_transform_clock; }
+
+	static constexpr size_t MAX_LIQUID_MASKS = 8;
+	// Object property liquid_mask_box of the objects nearest to the player,
+	// as matrices for the node shaders (see GenericCAO::getLiquidMask)
+	const std::vector<core::matrix4> &getLiquidMasks() const { return m_liquid_masks; }
+
 private:
 	irr_ptr<ClientMap> m_map;
 	LocalPlayer *m_local_player = nullptr;
@@ -162,4 +171,6 @@ private:
 	u64 m_frame_dtime = 0;
 	u64 m_frame_time_pause_accumulator = 0;
 	u64 m_frame_counter = 0;
+	TransformInterpolationClock m_transform_clock;
+	std::vector<core::matrix4> m_liquid_masks;
 };

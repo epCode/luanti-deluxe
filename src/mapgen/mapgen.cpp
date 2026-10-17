@@ -372,7 +372,8 @@ void Mapgen::updateLiquid(UniqueQueue<v3s16> *trans_liquid, v3s16 nmin, v3s16 nm
 			const content_t is_n = vm->m_data[vi].getContent();
 			if (is_n != was_n) {
 				isignored = is_n == CONTENT_IGNORE;
-				isliquid = ndef->get(is_n).isLiquid();
+				isliquid = ndef->get(is_n).isLiquid() ||
+						ndef->get(is_n).isWaterlogged();
 			}
 
 			if (isignored || wasignored || isliquid == wasliquid) {
@@ -411,7 +412,7 @@ void Mapgen::updateLiquid(UniqueQueue<v3s16> *trans_liquid, v3s16 nmin, v3s16 nm
 }
 
 
-void Mapgen::setLighting(u8 light, v3s16 nmin, v3s16 nmax)
+void Mapgen::setLighting(u16 light, v3s16 nmin, v3s16 nmax)
 {
 	ScopeProfiler sp(g_profiler, "EmergeThread: update lighting", SPT_AVG);
 	VoxelArea a(nmin, nmax);
@@ -426,35 +427,31 @@ void Mapgen::setLighting(u8 light, v3s16 nmin, v3s16 nmax)
 }
 
 
-void Mapgen::lightSpread(VoxelArea &a, std::queue<std::pair<v3s16, u8>> &queue,
-	const v3s16 &p, u8 light)
+void Mapgen::lightSpread(VoxelArea &a, std::queue<std::pair<v3s16, u16>> &queue,
+	const v3s16 &p, u16 light)
 {
-	if (light <= 1 || !a.contains(p))
+	// Decay light in each of the banks separately
+	u8 light_day = diminish_light(unpack_light_day(light));
+	u8 light_night = diminish_light(unpack_light_night(light));
+
+	if ((light_day == 0 && light_night == 0) || !a.contains(p))
 		return;
 
 	u32 vi = vm->m_area.index(p);
 	MapNode &n = vm->m_data[vi];
 
-	// Decay light in each of the banks separately
-	u8 light_day = light & 0x0F;
-	if (light_day > 0)
-		light_day -= 0x01;
-
-	u8 light_night = light & 0xF0;
-	if (light_night > 0)
-		light_night -= 0x10;
+	u8 old_day = unpack_light_day(n.param1);
+	u8 old_night = unpack_light_night(n.param1);
 
 	// Bail out only if we have no more light from either bank to propagate, or
 	// we hit a solid block that light cannot pass through.
-	if ((light_day  <= (n.param1 & 0x0F) &&
-			light_night <= (n.param1 & 0xF0)) ||
+	if ((light_day <= old_day && light_night <= old_night) ||
 			!ndef->getLightingFlags(n).light_propagates)
 		return;
 
 	// MYMAX still needed here because we only exit early if both banks have
 	// nothing to propagate anymore.
-	light = MYMAX(light_day, n.param1 & 0x0F) |
-			MYMAX(light_night, n.param1 & 0xF0);
+	light = pack_light(MYMAX(light_day, old_day), MYMAX(light_night, old_night));
 
 	n.param1 = light;
 
@@ -480,7 +477,7 @@ void Mapgen::propagateSunlight(v3s16 nmin, v3s16 nmax, bool propagate_shadow)
 	bool block_is_underground = (water_level >= nmax.Y);
 	const v3s32 &em = vm->m_area.getExtent();
 
-	// NOTE: Direct access to the low 4 bits of param1 is okay here because,
+	// NOTE: Direct access to the day bank of param1 is okay here because,
 	// by definition, sunlight will never be in the night lightbank.
 
 	for (int z = a.MinEdge.Z; z <= a.MaxEdge.Z; z++) {
@@ -490,7 +487,7 @@ void Mapgen::propagateSunlight(v3s16 nmin, v3s16 nmax, bool propagate_shadow)
 			if (vm->m_data[i].getContent() == CONTENT_IGNORE) {
 				if (block_is_underground)
 					continue;
-			} else if ((vm->m_data[i].param1 & 0x0F) != LIGHT_SUN &&
+			} else if (unpack_light_day(vm->m_data[i].param1) != LIGHT_SUN &&
 					propagate_shadow) {
 				continue;
 			}
@@ -500,7 +497,7 @@ void Mapgen::propagateSunlight(v3s16 nmin, v3s16 nmax, bool propagate_shadow)
 				MapNode &n = vm->m_data[i];
 				if (!ndef->getLightingFlags(n).sunlight_propagates)
 					break;
-				n.param1 = LIGHT_SUN;
+				n.param1 = pack_light(LIGHT_SUN, 0);
 				VoxelArea::add_y(em, i, -1);
 			}
 		}
@@ -512,7 +509,7 @@ void Mapgen::propagateSunlight(v3s16 nmin, v3s16 nmax, bool propagate_shadow)
 void Mapgen::spreadLight(const v3s16 &nmin, const v3s16 &nmax)
 {
 	//TimeTaker t("spreadLight");
-	std::queue<std::pair<v3s16, u8>> queue;
+	std::queue<std::pair<v3s16, u16>> queue;
 	VoxelArea a(nmin, nmax);
 
 	for (int z = a.MinEdge.Z; z <= a.MaxEdge.Z; z++) {
@@ -534,12 +531,13 @@ void Mapgen::spreadLight(const v3s16 &nmin, const v3s16 &nmax)
 				if (light_produced) {
 					// With separate sky light, sources only emit block light
 					if (g_separate_sky_light)
-						n.param1 = (n.param1 & 0x0F) | (light_produced << 4);
+						n.param1 = pack_light(unpack_light_day(n.param1),
+							light_produced);
 					else
-						n.param1 = light_produced | (light_produced << 4);
+						n.param1 = pack_light(light_produced, light_produced);
 				}
 
-				u8 light = n.param1;
+				u16 light = n.param1;
 				if (light) {
 					const v3s16 p(x, y, z);
 					// spread to all 6 neighbor nodes

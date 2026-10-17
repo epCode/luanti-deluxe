@@ -25,5 +25,6 @@ core.PLAYER_MAX_HP_DEFAULT = 20
 core.PLAYER_MAX_BREATH_DEFAULT = 10
 
 -- light.h
--- Maximum value for node 'light_source' parameter
+-- Brightest classic light level; sunlight spreads sideways with this level.
+-- Node 'light_source' may go up to core.LIGHT_SOURCE_MAX (60).
 core.LIGHT_MAX = 14

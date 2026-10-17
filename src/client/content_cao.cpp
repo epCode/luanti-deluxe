@@ -42,6 +42,7 @@
 #include <CMeshBuffer.h>
 
 #include "client/minecraft_animator.h"
+#include "client/minecraft_warden_animator.h"
 #include "client/shadows/pointlightshadows.h"
 #include <algorithm>
 #include <cmath>
@@ -455,6 +456,26 @@ void GenericCAO::setAttachment(object_t parent_id, const std::string &bone,
 	}
 
 	const auto old_parent = m_attachment_parent_id;
+
+	// With transform_interpolation, moving to another place on the same
+	// parent is shown as a smooth transition.
+	if (parent_id != 0 && parent_id == old_parent && bone == m_attachment_bone &&
+			m_prop.transform_interpolation &&
+			(position != m_attachment_position || rotation != m_attachment_rotation)) {
+		if (m_attach_duration <= 0.0f) {
+			m_attach_shown_pos = m_attachment_position;
+			m_attach_shown_rot = TransformQuat::fromIrrlichtRotation(m_attachment_rotation);
+		}
+		m_attach_from_pos = m_attach_shown_pos;
+		m_attach_from_rot = m_attach_shown_rot;
+		m_attach_time = 0.0f;
+		m_attach_duration = getTransitionTime();
+	} else {
+		m_attach_duration = 0.0f;
+	}
+	if (parent_id != old_parent)
+		m_interp.clear();
+
 	m_attachment_parent_id = parent_id;
 	m_attachment_bone = bone;
 	m_attachment_position = position;
@@ -584,6 +605,8 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 	}
 
 	m_visuals_expired = false;
+	m_scale_shown = m_prop.visual_size;
+	m_scale_duration = 0.0f;
 
 	if (!m_prop.is_visible)
 		return;
@@ -730,10 +753,21 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 				m_mc_animator.reset();
 			}
 
+			if (m_prop.procedural_animation == "minecraft_warden") {
+				if (!m_warden_animator) {
+					m_warden_animator = std::make_unique<MinecraftWardenAnimator>();
+					m_warden_animator->setState(m_animation_state);
+				}
+			} else {
+				m_warden_animator.reset();
+			}
+
 			m_animated_meshnode->setOnAnimateCallback([&](f32 dtime) {
 				// The procedural pose, which bone overrides then modify
 				if (m_mc_animator)
 					m_mc_animator->apply(m_animated_meshnode);
+				if (m_warden_animator)
+					m_warden_animator->apply(m_animated_meshnode);
 
 				for (auto it = m_bone_override.begin(); it != m_bone_override.end();) {
 					BoneOverride &props = it->second;
@@ -825,6 +859,12 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 				layer.Texture = point_shadows->getTexture();
 				layer.MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
 				layer.MagFilter = video::ETMAGF_NEAREST;
+				auto &map_layer = mat.TextureLayers[PointLightShadows::ENTITY_MAP_LAYER];
+				map_layer.Texture = point_shadows->getEntityMapTexture();
+				map_layer.MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
+				map_layer.MagFilter = video::ETMAGF_NEAREST;
+				map_layer.TextureWrapU = video::ETC_CLAMP_TO_EDGE;
+				map_layer.TextureWrapV = video::ETC_CLAMP_TO_EDGE;
 			});
 		}
 	}
@@ -874,8 +914,8 @@ void GenericCAO::updateLight(u32 day_night_ratio)
 	if (m_prop.glow < 0)
 		return;
 
-	u16 light_at_pos = 0;
-	u8 light_at_pos_intensity = 0;
+	u32 light_at_pos = 0;
+	u16 light_at_pos_intensity = 0;
 	bool pos_ok = false;
 
 	v3s16 pos[3];
@@ -885,8 +925,8 @@ void GenericCAO::updateLight(u32 day_night_ratio)
 		MapNode n = m_env->getMap().getNode(pos[i], &this_ok);
 		if (this_ok) {
 			// Get light level at the position plus the entity glow
-			u16 this_light = getInteriorLight(n, m_prop.glow, m_client->ndef());
-			u8 this_light_intensity = MYMAX(this_light & 0xFF, this_light >> 8);
+			u32 this_light = getInteriorLight(n, m_prop.glow, m_client->ndef());
+			u16 this_light_intensity = MYMAX(this_light & 0xFFFF, this_light >> 16);
 			if (this_light_intensity > light_at_pos_intensity) {
 				light_at_pos = this_light;
 				light_at_pos_intensity = this_light_intensity;
@@ -895,7 +935,7 @@ void GenericCAO::updateLight(u32 day_night_ratio)
 		}
 	}
 	if (!pos_ok)
-		light_at_pos = LIGHT_SUN;
+		light_at_pos = LIGHT_SUN_LEVEL;
 
 	video::SColor light;
 
@@ -947,14 +987,15 @@ video::SColor GenericCAO::getLightmapLight()
 	v3s16 p = floatToInt(m_position + v3f(0.0f, eye * BS, 0.0f), BS);
 	bool pos_ok;
 	MapNode n = m_env->getMap().getNode(p, &pos_ok);
-	u8 block = 0, sky = LIGHT_SUN;
+	u8 block = 0, sky = LIGHT_SUN_LEVEL;
 	if (pos_ok && n.getContent() != CONTENT_IGNORE) {
 		ContentLightingFlags f = m_client->ndef()->getLightingFlags(n);
 		block = n.getBlockLight(f);
 		sky = n.getSkyLight(f);
 	}
+	// Glow doesn't make extended light levels (above 15)
 	if (m_prop.glow > 0)
-		block = std::min<int>(LIGHT_SUN, block + m_prop.glow);
+		block = std::max<int>(block, std::min<int>(LIGHT_SUN_LEVEL, block + m_prop.glow));
 	return lightmap_object_light(block, sky);
 }
 
@@ -1160,11 +1201,20 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 		pos_translator.val_current = m_position;
 		pos_translator.val_target = m_position;
 	} else {
-		rot_translator.translate(dtime);
 		v3f lastpos = pos_translator.val_current;
 
-		if(m_prop.physical)
-		{
+		if (useTransformInterpolation() && !m_interp.empty()) {
+			// Play back the server's snapshots; no client-side prediction
+			TransformInterpolator::Sample s =
+					m_interp.sample(m_env->getTransformClock().getRenderTime());
+			m_position = s.pos;
+			m_velocity = s.vel;
+			m_acceleration = v3f(0.0f);
+			pos_translator.init(m_position);
+			m_rotation = s.rot.toObjectRotation();
+			rot_translator.init(m_rotation);
+		} else if (m_prop.physical) {
+			rot_translator.translate(dtime);
 			aabb3f box = m_prop.collisionbox;
 			box.MinEdge *= BS;
 			box.MaxEdge *= BS;
@@ -1181,13 +1231,15 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 
 			bool is_end_position = moveresult.collides;
 			pos_translator.update(m_position, is_end_position, dtime);
+			pos_translator.translate(dtime);
 		} else {
+			rot_translator.translate(dtime);
 			m_position += dtime * m_velocity + 0.5 * dtime * dtime * m_acceleration;
 			m_velocity += dtime * m_acceleration;
 			pos_translator.update(m_position, pos_translator.aim_is_end,
 					pos_translator.anim_time);
+			pos_translator.translate(dtime);
 		}
-		pos_translator.translate(dtime);
 		updateNodePos();
 
 		float moved = lastpos.getDistanceFrom(pos_translator.val_current);
@@ -1258,11 +1310,120 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 		updateNodePos();
 	}
 
+	stepTransitions(dtime);
 	updateProceduralAnimation(dtime);
+}
+
+bool GenericCAO::getLiquidMask(core::matrix4 &out) const
+{
+	const aabb3f &box = m_prop.liquid_mask_box;
+	v3f half = box.getExtent() * (0.5f * BS);
+	if (half.X <= 0.0f || half.Y <= 0.0f || half.Z <= 0.0f || !m_matrixnode ||
+			!m_prop.is_visible)
+		return false;
+
+	core::matrix4 transform;
+	if (getParent()) {
+		transform = m_matrixnode->getAbsoluteTransformation();
+	} else {
+		// As updateNodePos sets it, without waiting for the scene update
+		setPitchYawRoll(transform, -rot_translator.val_current);
+		transform.setTranslation(pos_translator.val_current -
+				intToFloat(m_env->getCameraOffset(), BS));
+	}
+	core::matrix4 inverse;
+	if (!transform.getInverse(inverse))
+		return false;
+
+	// (p - center) / half
+	core::matrix4 normalize;
+	normalize.setScale(v3f(1.0f / half.X, 1.0f / half.Y, 1.0f / half.Z));
+	v3f center = box.getCenter() * BS;
+	normalize.setTranslation(v3f(-center.X / half.X, -center.Y / half.Y,
+			-center.Z / half.Z));
+	out = normalize * inverse;
+	return true;
+}
+
+f32 GenericCAO::getTransitionTime() const
+{
+	// As long as the playback delay: one server step plus jitter
+	return std::max(m_env->getTransformClock().getDelay(), 0.05f);
+}
+
+void GenericCAO::applyVisualScale(v3f size)
+{
+	m_scale_shown = size;
+	if (m_animated_meshnode)
+		m_animated_meshnode->setScale(size);
+	else if (m_meshnode)
+		m_meshnode->setScale(size);
+	else if (m_wield_meshnode)
+		m_wield_meshnode->setScale(size / 2.0f);
+	else if (m_spritenode)
+		m_spritenode->setSize(v2f(size.X, size.Y) * BS);
+}
+
+static f32 smoothstep01(f32 t)
+{
+	t = rangelim(t, 0.0f, 1.0f);
+	return t * t * (3.0f - 2.0f * t);
+}
+
+void GenericCAO::stepTransitions(float dtime)
+{
+	if (m_scale_duration > 0.0f) {
+		m_scale_time += dtime;
+		f32 f = smoothstep01(m_scale_time / m_scale_duration);
+		applyVisualScale(m_scale_from + (m_prop.visual_size - m_scale_from) * f);
+		if (m_scale_time >= m_scale_duration)
+			m_scale_duration = 0.0f;
+	}
+
+	if (m_attach_duration > 0.0f) {
+		if (!getParent() || !m_matrixnode) {
+			m_attach_duration = 0.0f;
+			return;
+		}
+		m_attach_time += dtime;
+		f32 f = smoothstep01(m_attach_time / m_attach_duration);
+		m_attach_shown_pos = m_attach_from_pos +
+				(m_attachment_position - m_attach_from_pos) * f;
+		m_attach_shown_rot = TransformQuat::slerp(m_attach_from_rot,
+				TransformQuat::fromIrrlichtRotation(m_attachment_rotation), f);
+		getPosRotMatrix().setTranslation(m_attach_shown_pos);
+		m_attach_shown_rot.toMatrix(getPosRotMatrix());
+		m_matrixnode->updateAbsolutePosition();
+		if (m_attach_time >= m_attach_duration)
+			m_attach_duration = 0.0f;
+	}
+}
+
+void GenericCAO::setupWardenMaterials()
+{
+	if (!m_warden_animator || !m_animated_meshnode)
+		return;
+	// The emissive layers are alpha blended
+	IShaderSource *shader_source = m_client->getShaderSource();
+	ShaderFeatures features;
+	features.skinning = m_animated_meshnode->getMesh()->needsHwSkinning();
+	MaterialType type = (m_prop.shaded && m_prop.glow == 0) ?
+			TILE_MATERIAL_ALPHA : TILE_MATERIAL_PLAIN_ALPHA;
+	u32 shader_id = shader_source->getShader("object_shader", type, NDT_NORMAL, features);
+	m_warden_animator->setupMaterials(m_animated_meshnode,
+			shader_source->getShaderInfo(shader_id).material);
 }
 
 void GenericCAO::updateProceduralAnimation(float dtime)
 {
+	if (m_warden_animator) {
+		MinecraftWardenAnimator::Input in;
+		in.position = getPosition() / BS;
+		in.attached = getParent() != nullptr;
+		in.lightmap = m_client->getLightmapState().isEnabled();
+		m_warden_animator->step(dtime, in);
+	}
+
 	if (!m_mc_animator)
 		return;
 
@@ -1286,7 +1447,7 @@ void GenericCAO::updateProceduralAnimation(float dtime)
 		in.look_pitch = m_animation_state.look_pitch;
 	}
 	if (auto *parent = dynamic_cast<GenericCAO *>(getParent()))
-		in.mount_yaw = parent->getRotation().Y;
+		in.mount_yaw = parent->getVisualRotation().Y;
 	m_mc_animator->step(dtime, in);
 }
 
@@ -1436,6 +1597,8 @@ void GenericCAO::updateTextures(std::string mod)
 				material.BackfaceCulling = m_prop.backface_culling;
 				setMaterialTextureAndFilters(material, texturestring, tsrc);
 			}
+			if (m_warden_animator)
+				setupWardenMaterials();
 		}
 	}
 
@@ -1702,6 +1865,23 @@ void GenericCAO::processMessage(const std::string &data)
 		bool expire_visuals = visualExpiryRequired(newprops);
 		bool textures_changed = m_prop.textures != newprops.textures;
 
+		// With transform_interpolation, a change of visual_size alone is
+		// shown as a smooth transition instead of rebuilding the visual.
+		bool scale_transition = false;
+		if (expire_visuals && newprops.transform_interpolation &&
+				m_prop.transform_interpolation && getSceneNode() &&
+				m_prop.visual != OBJECTVISUAL_UPRIGHT_SPRITE &&
+				newprops.visual_size != m_prop.visual_size) {
+			ObjectProperties same_size = newprops;
+			same_size.visual_size = m_prop.visual_size;
+			if (!visualExpiryRequired(same_size)) {
+				expire_visuals = false;
+				scale_transition = true;
+			}
+		}
+		if (!newprops.transform_interpolation)
+			m_interp.clear();
+
 		// Apply changes
 		m_prop = std::move(newprops);
 
@@ -1732,6 +1912,12 @@ void GenericCAO::processMessage(const std::string &data)
 		if (m_is_local_player)
 			m_prop.show_on_minimap = false;
 
+		if (scale_transition) {
+			m_scale_from = m_scale_shown;
+			m_scale_time = 0.0f;
+			m_scale_duration = getTransitionTime();
+		}
+
 		if (expire_visuals) {
 			expireVisuals();
 		} else {
@@ -1755,9 +1941,54 @@ void GenericCAO::processMessage(const std::string &data)
 		bool do_interpolate = readU8(is);
 		bool is_end_position = readU8(is);
 		float update_interval = readF32(is);
+		// Luanti Deluxe servers add timestamps
+		bool stamped = canRead(is);
+		u32 server_ms = 0, hold_ms = 0;
+		if (stamped) {
+			server_ms = readU32(is);
+			hold_ms = readU32(is);
+		}
 
 		if(getParent() != NULL) // Just in case
 			return;
+
+		if (stamped) {
+			TransformInterpolationClock &clock = m_env->getTransformClock();
+			f64 t = clock.toServerTime(server_ms);
+			f64 hold = clock.toServerTime(hold_ms);
+			clock.onSnapshot(t, update_interval);
+			if (useTransformInterpolation()) {
+				TransformSnapshot s;
+				s.time = t;
+				s.pos = m_position;
+				s.vel = m_velocity;
+				// Players send no velocity, and objects that mods move by
+				// setting positions (velocity 0, but moving) have none either:
+				// the movement between snapshots gives the tangents then.
+				s.has_vel = !m_is_player && !(m_velocity == v3f(0.0f) &&
+						!m_interp.empty() && m_interp.newest().pos != m_position);
+				s.rot = TransformQuat::fromObjectRotation(m_rotation);
+				if (!do_interpolate) {
+					m_interp.reset(s);
+				} else {
+					f64 now = clock.getRenderTime();
+					if (m_interp.empty() && now < t) {
+						// Start from what is shown now
+						TransformSnapshot cur;
+						cur.time = now;
+						cur.pos = pos_translator.val_current;
+						cur.rot = TransformQuat::fromObjectRotation(
+								rot_translator.val_current);
+						m_interp.reset(cur);
+					}
+					m_interp.push(s, hold);
+				}
+				// Shown values are set by step()
+				m_position = pos_translator.val_current;
+				m_rotation = rot_translator.val_current;
+				return;
+			}
+		}
 
 		if(do_interpolate)
 		{
@@ -1945,10 +2176,16 @@ void GenericCAO::processMessage(const std::string &data)
 		m_animation_state = state;
 		if (m_mc_animator)
 			m_mc_animator->setState(state);
+		if (m_warden_animator)
+			m_warden_animator->setState(state);
 	} else if (cmd == AO_CMD_SWING_ARM) {
 		// The local player's swings are predicted
 		if (m_mc_animator && !m_is_local_player)
 			m_mc_animator->swing();
+	} else if (cmd == AO_CMD_ENTITY_EVENT) {
+		u8 id = readU8(is);
+		if (m_warden_animator)
+			m_warden_animator->entityEvent(id);
 	} else if (cmd == AO_CMD_PUNCHED) {
 		u16 result_hp = readU16(is);
 
@@ -1956,6 +2193,8 @@ void GenericCAO::processMessage(const std::string &data)
 		s32 damage = (s32)m_hp - (s32)result_hp;
 		if (damage > 0 && m_mc_animator)
 			m_mc_animator->hurt();
+		if (damage > 0 && m_warden_animator)
+			m_warden_animator->hurt();
 
 		m_hp = result_hp;
 

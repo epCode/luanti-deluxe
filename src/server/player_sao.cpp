@@ -287,6 +287,14 @@ void PlayerSAO::step(float dtime, bool send_recommended)
 		else
 			pos = getBasePosition();
 
+		// Player positions arrive at the client's own send rate: only a
+		// longer pause means that the player stood still.
+		u32 now_ms = getServerTimeMs();
+		u32 hold_ms = m_last_send_opportunity_ms;
+		if ((s32)(now_ms - 250 - hold_ms) > 0)
+			hold_ms = now_ms - 250;
+		m_last_send_opportunity_ms = now_ms;
+
 		std::string str = generateUpdatePositionCommand(
 			pos,
 			v3f(0.0f, 0.0f, 0.0f),
@@ -294,7 +302,9 @@ void PlayerSAO::step(float dtime, bool send_recommended)
 			m_rotation,
 			true,
 			false,
-			update_interval
+			update_interval,
+			now_ms,
+			hold_ms
 		);
 		// create message and add to list
 		m_messages_out.emplace(getId(), false, str);

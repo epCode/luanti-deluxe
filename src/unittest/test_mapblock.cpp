@@ -28,6 +28,10 @@ public:
 
 	void testSave29(IGameDef *gamedef);
 
+	// Tests the conversion of extended light levels from and to the
+	// format before version 30
+	void testLegacyLight(IGameDef *gamedef);
+
 	void testLoad29(IGameDef *gamedef);
 
 	// Tests loading a MapBlock from Minetest-c55 0.3
@@ -47,6 +51,7 @@ void TestMapBlock::runTests(IGameDef *gamedef)
 	TEST(testSaveLoad, gamedef, SER_FMT_VER_HIGHEST_WRITE);
 	TEST(testSaveLoadLowest, gamedef);
 	TEST(testSave29, gamedef);
+	TEST(testLegacyLight, gamedef);
 	TEST(testLoad29, gamedef);
 	TEST(testLoad20, gamedef);
 	TEST(testLoadNonStd, gamedef);
@@ -167,6 +172,19 @@ void TestMapBlock::testSaveLoad(IGameDef *gamedef, const u8 version)
 	UASSERT(max >= 2);
 	UASSERT(max <= CONTENT_UNKNOWN);
 
+	// param1 is 16 bits wide since version 30. Before that, light values
+	// are stored with 4 bits per bank, so only those survive.
+	auto *ndef = gamedef->getNodeDefManager();
+	auto make_node = [&] (u32 rval) {
+		content_t c = rval % max;
+		u16 param1 = (rval >> 16) & 0xff;
+		if (version >= 30)
+			param1 = (rval >> 12) & 0xfff;
+		else if (ndef->getLightingFlags(MapNode(c)).has_light)
+			param1 = legacy_unpack_light(legacy_pack_light(legacy_unpack_light(param1)));
+		return MapNode(c, param1, (rval >> 24) & 0xff);
+	};
+
 	constexpr u64 seed = 0x207366616e3520ULL;
 	std::stringstream ss;
 	{
@@ -177,8 +195,7 @@ void TestMapBlock::testSaveLoad(IGameDef *gamedef, const u8 version)
 		for (s16 y=0; y < MAP_BLOCKSIZE; y++)
 		for (s16 x=0; x < MAP_BLOCKSIZE; x++) {
 			u32 rval = r.next();
-			block.setNodeNoCheck(x, y, z,
-					MapNode(rval % max, (rval >> 16) & 0xff, (rval >> 24) & 0xff));
+			block.setNodeNoCheck(x, y, z, make_node(rval));
 		}
 
 		// Serialize
@@ -196,11 +213,56 @@ void TestMapBlock::testSaveLoad(IGameDef *gamedef, const u8 version)
 		for (s16 y=0; y < MAP_BLOCKSIZE; y++)
 		for (s16 x=0; x < MAP_BLOCKSIZE; x++) {
 			u32 rval = r.next();
-			auto expect =
-				MapNode(rval % max, (rval >> 16) & 0xff, (rval >> 24) & 0xff);
+			auto expect = make_node(rval);
 			UASSERT(block.getNodeNoCheck(x, y, z) == expect);
 		}
 	}
+}
+
+void TestMapBlock::testLegacyLight(IGameDef *gamedef)
+{
+	// Air has light, stone doesn't
+	const MapNode nodes[] = {
+		MapNode(CONTENT_AIR, pack_light(LIGHT_SUN, 0)),
+		MapNode(CONTENT_AIR, pack_light(LIGHT_SUN, 40)),
+		MapNode(CONTENT_AIR, pack_light(13, 12)),
+		MapNode(CONTENT_AIR, pack_light(LIGHT_LIMIT, LIGHT_LIMIT)),
+		MapNode(t_CONTENT_STONE, 200),
+	};
+	// The same nodes after a round trip through version 29
+	const MapNode nodes_v29[] = {
+		MapNode(CONTENT_AIR, pack_light(LIGHT_SUN, 0)),
+		MapNode(CONTENT_AIR, pack_light(LIGHT_SUN, LIGHT_MAX)),
+		MapNode(CONTENT_AIR, pack_light(13, 12)),
+		MapNode(CONTENT_AIR, pack_light(LIGHT_MAX, LIGHT_MAX)),
+		MapNode(t_CONTENT_STONE, 200),
+	};
+	constexpr int count = ARRLEN(nodes);
+
+	for (u8 version : {(u8)29, SER_FMT_VER_HIGHEST_WRITE}) {
+		for (bool disk : {true, false}) {
+			std::stringstream ss;
+			{
+				MapBlock block({}, gamedef);
+				for (s16 i = 0; i < MAP_BLOCKSIZE * MAP_BLOCKSIZE * MAP_BLOCKSIZE; i++)
+					block.data[i] = nodes[i % count];
+				block.serialize(ss, version, disk, -1);
+				// Serializing doesn't change the block
+				for (int i = 0; i < count; i++)
+					UASSERT(block.data[i] == nodes[i]);
+			}
+			MapBlock block({}, gamedef);
+			block.deSerialize(ss, version, disk);
+			const MapNode *expect = version < 30 ? nodes_v29 : nodes;
+			for (s16 i = 0; i < MAP_BLOCKSIZE * MAP_BLOCKSIZE * MAP_BLOCKSIZE; i++)
+				UASSERT(block.data[i] == expect[i % count]);
+		}
+	}
+
+	// Light values as stored before version 30: day 15 is sunlight
+	UASSERTEQ(int, legacy_unpack_light(0x0F), pack_light(LIGHT_SUN, 0));
+	UASSERTEQ(int, legacy_unpack_light(0xDE), pack_light(14, 13));
+	UASSERTEQ(int, legacy_pack_light(pack_light(LIGHT_SUN, 30)), 0xEF);
 }
 
 #define SS2_CHECK() UASSERT(!ss2.fail())

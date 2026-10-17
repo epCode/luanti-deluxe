@@ -5,6 +5,7 @@
 
 #include "irrlichttypes.h"
 #include "irr_v3d.h"
+#include "light.h"
 #include "lighting.h"
 #include <SColor.h>
 #include <random>
@@ -149,10 +150,13 @@ private:
 };
 
 /// Material color for objects lit with the lightmap: whole block and sky
-/// light levels in red and green, see object_shader
+/// light levels in red and green, block light above 15 (extended light
+/// levels) in blue, see object_shader
 inline video::SColor lightmap_object_light(u8 block, u8 sky)
 {
-	return video::SColor(255, std::min<u8>(block, 15) * 17, std::min<u8>(sky, 15) * 17, 0);
+	u8 extended = block > 15 ? std::min(block, (u8)LIGHT_LIMIT) - 15 : 0;
+	return video::SColor(255, std::min<u8>(block, 15) * 17, std::min<u8>(sky, 15) * 17,
+			extended);
 }
 
 /// Creates the shader uniform setter factory for the lightmap uniforms

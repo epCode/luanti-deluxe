@@ -1,0 +1,15 @@
+{
+ "name": "VHS Tape 1987",
+ "author": "Luanti Shader Studio",
+ "description": "Wobbly tracking, smeared colour, tape noise and a soft, washed-out picture.",
+ "version": "1.0",
+ "generator": "Luanti Shader Studio 1.0.0",
+ "target": "Luanti 5.17.0-dev (minetest)",
+ "created": "2026-10-15",
+ "stages": [
+  "second_stage"
+ ],
+ "recommended_settings": {
+  "enable_post_processing": "true"
+ }
+}

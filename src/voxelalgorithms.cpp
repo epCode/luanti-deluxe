@@ -180,11 +180,9 @@ static inline ContentLightingFlags bank_flags(const NodeDefManager *ndef,
 static inline u8 bank_light(LightBank bank, const MapNode &n,
 	ContentLightingFlags f)
 {
-	// MapNode::getLight() reports max(sky, block) for the day bank
-	// with separate sky light; propagation needs the sky light alone.
-	if (bank == LIGHTBANK_DAY && g_separate_sky_light)
-		return n.getLightRaw(LIGHTBANK_DAY, f);
-	return n.getLight(bank, f);
+	// The stored light (sunlight being LIGHT_SUN), unlike MapNode::getLight()
+	// which reports levels as seen by games
+	return MYMAX(f.light_source, n.getLightRaw(bank, f));
 }
 
 /*!
@@ -286,9 +284,8 @@ void unspread_light(Map *map, const NodeDefManager *nodemgr, LightBank bank,
 		// The current node
 		const MapNode &node = current.block->getNodeNoCheck(current.rel_position);
 		ContentLightingFlags f = bank_flags(nodemgr, bank, node);
-		// If the node emits light, it behaves like it had a
-		// brighter neighbor.
-		u8 brightest_neighbor_light = f.light_source + 1;
+		// Brightest neighbor that can light up this node
+		u8 brightest_neighbor_light = 0;
 		for (direction i = 0; i < 6; i++) {
 			//For each neighbor
 
@@ -342,11 +339,17 @@ void unspread_light(Map *map, const NodeDefManager *nodemgr, LightBank bank,
 				}
 			}
 		}
+		// If the node emits light, it behaves like it had a
+		// brighter neighbor.
+		u8 new_light = diminish_light(brightest_neighbor_light);
+		if (f.light_source >= new_light) {
+			new_light = f.light_source;
+			source_dir = 6;
+		}
 		// If the brightest neighbor is able to light up this node,
 		// then add this node to the output nodes.
-		if (brightest_neighbor_light > 1 && f.light_propagates) {
-			brightest_neighbor_light--;
-			light_sources.push(brightest_neighbor_light, current.rel_position,
+		if (new_light > 0 && f.light_propagates) {
+			light_sources.push(new_light, current.rel_position,
 				current.block_position, current.block,
 				(source_dir == 6) ? 6 : 5 - source_dir
 				/* with opposite direction*/);
@@ -378,7 +381,7 @@ void spread_light(Map *map, const NodeDefManager *nodemgr, LightBank bank,
 	mapblock_v3 neighbor_block_pos;
 	relative_v3 neighbor_rel_pos;
 	while (light_sources.next(spreading_light, current)) {
-		spreading_light--;
+		spreading_light = diminish_light(spreading_light);
 		for (direction i = 0; i < 6; i++) {
 			// This node can't light up its light source
 			if (current.source_direction + i == 5) {
@@ -548,8 +551,9 @@ void update_lighting_nodes(Map *map,
 								bank_flags(ndef, bank, n2));
 							// If it is sure that the neighbor won't be
 							// unlighted, its light can spread to this node.
-							if (spread > new_light && spread >= min_safe_light) {
-								new_light = spread - 1;
+							if (diminish_light(spread) > new_light &&
+									spread >= min_safe_light) {
+								new_light = diminish_light(spread);
 							}
 						}
 					}
@@ -690,8 +694,8 @@ bool is_light_locally_correct(Map *map, const NodeDefManager *ndef,
 		return true;
 	}
 	u8 light = bank_light(bank, n, f);
-	assert(f.light_source <= LIGHT_SUN);
-	u8 brightest_neighbor = f.light_source + 1;
+	assert(f.light_source <= LIGHT_LIMIT);
+	u8 brightest_neighbor = 0;
 	for (const v3s16 &neighbor_dir : neighbor_dirs) {
 		MapNode n2 = map->getNode(pos + neighbor_dir,
 			&is_valid_position);
@@ -701,7 +705,7 @@ bool is_light_locally_correct(Map *map, const NodeDefManager *ndef,
 		}
 	}
 	assert(light <= LIGHT_SUN);
-	return brightest_neighbor == light + 1;
+	return MYMAX(f.light_source, diminish_light(brightest_neighbor)) == light;
 }
 
 void update_block_border_lighting(Map *map, MapBlock *block,
@@ -827,7 +831,7 @@ void fill_with_sunlight(MMVManip *vm, const NodeDefManager *ndef, v2s16 offset,
 				// Sunlight is stopped.
 				lig = false;
 			// Reset light
-			n->setLight(LIGHTBANK_DAY, lig ? 15 : 0, f);
+			n->setLight(LIGHTBANK_DAY, lig ? LIGHT_SUN : 0, f);
 			n->setLight(LIGHTBANK_NIGHT, 0, f);
 		}
 		// Output outgoing light.
@@ -1042,7 +1046,7 @@ void finish_bulk_light_update(Map *map, mapblock_v3 minblock,
 	for (size_t b = 0; b < 2; b++) {
 		LightBank bank = banks[b];
 		// Sunlight is already initialized.
-		u8 maxlight = (b == 0) ? LIGHT_MAX : LIGHT_SUN;
+		u8 maxlight = (b == 0) ? LIGHT_LIMIT : LIGHT_SUN;
 		// Initialize light values for light spreading.
 		for (u8 i = 0; i <= maxlight; i++) {
 			const auto &lights = relight[b].lights[i];
@@ -1187,7 +1191,7 @@ void fill_with_sunlight(MapBlock *block, const NodeDefManager *ndef,
 				lig = false;
 			}
 			// Reset light
-			n.setLight(LIGHTBANK_DAY, lig ? 15 : 0, f);
+			n.setLight(LIGHTBANK_DAY, lig ? LIGHT_SUN : 0, f);
 			n.setLight(LIGHTBANK_NIGHT, 0, f);
 			block->setNodeNoCheck(x, y, z, n);
 		}

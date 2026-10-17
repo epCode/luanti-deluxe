@@ -19,6 +19,7 @@ public:
 
 	void testVoxelLineIterator();
 	void testLighting(IGameDef *gamedef);
+	void testExtendedLighting(IGameDef *gamedef);
 };
 
 static TestVoxelAlgorithms g_test_instance;
@@ -27,6 +28,7 @@ void TestVoxelAlgorithms::runTests(IGameDef *gamedef)
 {
 	TEST(testVoxelLineIterator);
 	TEST(testLighting, gamedef);
+	TEST(testExtendedLighting, gamedef);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -151,5 +153,95 @@ void TestVoxelAlgorithms::testLighting(IGameDef *gamedef)
 		// Test that irrelevant param1 values are not clobbered.
 		MapNode n = map.getNode(v3s16(-10, 1, 0));
 		UASSERTEQ(int, n.getParam1(), 153);
+	}
+}
+
+void TestVoxelAlgorithms::testExtendedLighting(IGameDef *gamedef)
+{
+	v3s16 pmin(-64, -16, -16);
+	v3s16 pmax(63, 31, 15);
+	v3s16 bpmin = getNodeBlockPos(pmin), bpmax = getNodeBlockPos(pmax);
+	DummyMap map(gamedef, bpmin, bpmax);
+	const NodeDefManager *ndef = gamedef->ndef();
+
+	// Stone everywhere but a corridor along X, with a shaft to the sky
+	// at x = 50
+	{
+		std::map<v3s16, MapBlock*> modified_blocks;
+		MMVManip vm(&map);
+		vm.initialEmerge(bpmin, bpmax, false);
+		u32 volume = vm.m_area.getVolume();
+		for (u32 i = 0; i < volume; i++)
+			vm.m_data[i] = MapNode(t_CONTENT_STONE);
+		for (s16 x = -60; x <= 60; x++)
+			vm.setNodeNoEmerge(v3s16(x, 0, 0), MapNode(CONTENT_AIR));
+		for (s16 y = 1; y <= pmax.Y; y++)
+			vm.setNodeNoEmerge(v3s16(50, y, 0), MapNode(CONTENT_AIR));
+		voxalgo::blit_back_with_light(&map, &vm, &modified_blocks);
+	}
+
+	auto light_at = [&] (s16 x, LightBank bank) -> int {
+		MapNode n = map.getNode(v3s16(x, 0, 0));
+		return n.getLight(bank, ndef->getLightingFlags(n));
+	};
+
+	// Sunlight comes down the shaft and spreads sideways as before
+	{
+		MapNode n = map.getNode(v3s16(50, 0, 0));
+		UASSERT(n.isSunlit(ndef->getLightingFlags(n)));
+		UASSERTEQ(int, light_at(50, LIGHTBANK_DAY), LIGHT_SUN_LEVEL);
+		UASSERTEQ(int, light_at(49, LIGHTBANK_DAY), LIGHT_MAX);
+		UASSERTEQ(int, light_at(45, LIGHTBANK_DAY), LIGHT_MAX - 4);
+		UASSERTEQ(int, light_at(36, LIGHTBANK_DAY), 1);
+		UASSERTEQ(int, light_at(35, LIGHTBANK_DAY), 0);
+		UASSERTEQ(int, light_at(45, LIGHTBANK_NIGHT), 0);
+	}
+
+	// A lamp lights up to 39 nodes away
+	{
+		std::map<v3s16, MapBlock*> modified_blocks;
+		map.addNodeAndUpdate(v3s16(0, 0, 0), MapNode(t_CONTENT_LAMP), modified_blocks);
+	}
+	UASSERTEQ(int, light_at(0, LIGHTBANK_NIGHT), 40);
+	UASSERTEQ(int, light_at(0, LIGHTBANK_DAY), 40);
+	UASSERTEQ(int, light_at(-1, LIGHTBANK_NIGHT), 39);
+	UASSERTEQ(int, light_at(-25, LIGHTBANK_NIGHT), 15);
+	UASSERTEQ(int, light_at(-39, LIGHTBANK_NIGHT), 1);
+	UASSERTEQ(int, light_at(-40, LIGHTBANK_NIGHT), 0);
+	UASSERTEQ(int, light_at(-30, LIGHTBANK_DAY), 10);
+	// Next to the sunlit node, the lamp is brighter than sunlight
+	UASSERTEQ(int, light_at(39, LIGHTBANK_NIGHT), 1);
+	UASSERTEQ(int, light_at(45, LIGHTBANK_DAY), LIGHT_MAX - 4);
+	UASSERTEQ(int, light_at(20, LIGHTBANK_DAY), 20);
+	{
+		// The day bank reports max(sunlight, artificial light)
+		std::map<v3s16, MapBlock*> modified_blocks;
+		map.addNodeAndUpdate(v3s16(48, 0, 0), MapNode(t_CONTENT_LAMP), modified_blocks);
+		UASSERTEQ(int, light_at(50, LIGHTBANK_DAY), 38);
+		UASSERTEQ(int, light_at(50, LIGHTBANK_NIGHT), 38);
+		MapNode n = map.getNode(v3s16(50, 0, 0));
+		UASSERT(n.isSunlit(ndef->getLightingFlags(n)));
+		UASSERTEQ(int, light_at(55, LIGHTBANK_NIGHT), 33);
+		map.addNodeAndUpdate(v3s16(48, 0, 0), MapNode(CONTENT_AIR), modified_blocks);
+		UASSERTEQ(int, light_at(50, LIGHTBANK_DAY), LIGHT_SUN_LEVEL);
+		UASSERTEQ(int, light_at(55, LIGHTBANK_NIGHT), 0);
+		UASSERTEQ(int, light_at(55, LIGHTBANK_DAY), LIGHT_MAX - 4);
+	}
+
+	// Removing the lamp removes all of its light
+	{
+		std::map<v3s16, MapBlock*> modified_blocks;
+		map.addNodeAndUpdate(v3s16(0, 0, 0), MapNode(CONTENT_AIR), modified_blocks);
+	}
+	for (s16 x = -60; x <= 35; x++) {
+		UASSERTEQ(int, light_at(x, LIGHTBANK_NIGHT), 0);
+		UASSERTEQ(int, light_at(x, LIGHTBANK_DAY), 0);
+	}
+	UASSERTEQ(int, light_at(45, LIGHTBANK_DAY), LIGHT_MAX - 4);
+
+	// Blending reports levels as games see them
+	{
+		MapNode n = map.getNode(v3s16(50, 0, 0));
+		UASSERTEQ(int, n.getLightBlend(1000, ndef->getLightingFlags(n)), LIGHT_SUN_LEVEL);
 	}
 }

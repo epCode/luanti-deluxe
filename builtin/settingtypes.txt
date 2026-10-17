@@ -836,6 +836,19 @@ enable_point_light_shadows (Point light shadows) bool true
 #    Requires: enable_point_light_shadows
 point_light_shadow_strength (Point light shadow strength) float 0.75 0.0 1.0
 
+#    How entities (players, mobs, dropped items...) cast shadows from light
+#    emitting nodes, from cheapest to most expensive. All of them stay
+#    pixelated with pixelated shadows.
+#    -    none: Entities don't cast shadows from light sources.
+#    -    boxes: Each body part (bone) of an entity casts a box shaped shadow.
+#    -    voxels: The entity's actual shape is turned into quarter node voxels
+#         every frame, like the shadows of nodes.
+#    -    shadowmaps: The nearest light sources render the entities' exact
+#         shape from their position (6 renders per light source).
+#
+#    Requires: enable_point_light_shadows
+point_light_entity_shadows (Entity shadows from light sources) enum boxes none,boxes,voxels,shadowmaps
+
 [**Post Processing]
 
 #    Enables the post processing pipeline.
@@ -1068,6 +1081,10 @@ enable_split_login_register (Enable split login/register) bool true
 update_information_url (Update information URL) string https://www.luanti.org/release_info.json
 
 [*Server] [server]
+
+#    Game chosen when none is given: the game the main menu selects first, and the
+#    game a dedicated server uses for a new world started without --gameid.
+default_game (Default game) [common] string mineclonia
 
 #    Name of the player.
 #    When running a server, a client connecting with this name is admin.

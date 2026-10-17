@@ -328,7 +328,9 @@ int ModApiEnv::l_get_natural_light(lua_State *L)
 		return 0;
 
 	// If the daylight is 0, nothing needs to be calculated
-	u8 daylight = n.param1 & 0x0f;
+	// (natural light is at most LIGHT_SUN_LEVEL)
+	const u8 day_bank = unpack_light_day(n.param1);
+	u8 daylight = MYMIN(light_level(day_bank), LIGHT_SUN_LEVEL);
 	if (daylight == 0) {
 		lua_pushinteger(L, 0);
 		return 1;
@@ -343,9 +345,9 @@ int ModApiEnv::l_get_natural_light(lua_State *L)
 	}
 	u32 dnr = time_to_daynight_ratio(time_of_day, true);
 
-	// If it's the same as the artificial light, the sunlight needs to be
-	// searched for because the value may not emanate from the sun
-	if (!g_separate_sky_light && daylight == n.param1 >> 4)
+	// If it's not brighter than the artificial light, the sunlight needs to
+	// be searched for because the value may not emanate from the sun
+	if (!g_separate_sky_light && day_bank <= unpack_light_night(n.param1))
 		daylight = env->findSunlight(pos);
 
 	lua_pushinteger(L, dnr * daylight / 1000);

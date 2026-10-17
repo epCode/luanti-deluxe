@@ -22,6 +22,7 @@ content_t t_CONTENT_TORCH;
 content_t t_CONTENT_WATER;
 content_t t_CONTENT_LAVA;
 content_t t_CONTENT_BRICK;
+content_t t_CONTENT_LAMP;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -115,6 +116,19 @@ void TestGameDef::defineSomeNodes()
 	f.light_source = LIGHT_MAX-1;
 	idef->registerItem(itemdef);
 	t_CONTENT_TORCH = ndef->set(f.name, f);
+
+	//// Lamp with an extended light level (minimal definition for lighting tests)
+	itemdef = ItemDefinition();
+	itemdef.type = ITEM_NODE;
+	itemdef.name = "test:lamp";
+	f = ContentFeatures();
+	f.name = itemdef.name;
+	f.param_type = CPT_LIGHT;
+	f.light_propagates = true;
+	f.sunlight_propagates = true;
+	f.light_source = 40;
+	idef->registerItem(itemdef);
+	t_CONTENT_LAMP = ndef->set(f.name, f);
 
 	//// Water
 	itemdef = ItemDefinition();

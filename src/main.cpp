@@ -1095,10 +1095,14 @@ static bool determine_subgame(GameParams *game_params)
 			gamespec = game_params->game_spec;
 		} else {
 			auto games = getAvailableGameIds();
+			const std::string default_game = g_settings->get("default_game");
 			// If there's exactly one obvious choice then do the right thing
 			if (games.size() > 1)
 				games.erase("devtest");
-			if (games.size() == 1) {
+			if (!default_game.empty() && games.count(default_game)) {
+				gamespec = findSubgame(default_game);
+				infostream << "Using default gameid [" << gamespec.id << "]" << std::endl;
+			} else if (games.size() == 1) {
 				gamespec = findSubgame(*games.begin());
 				infostream << "Automatically selecting gameid [" << gamespec.id << "]" << std::endl;
 			} else {

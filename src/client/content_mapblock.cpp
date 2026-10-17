@@ -11,6 +11,7 @@
 #include "mapblock_mesh.h"
 #include "node_visuals.h"
 #include "nodedef.h"
+#include "waterlogging.h"
 #include "client/tile.h"
 #include "mesh.h"
 #include "client/meshgen/collector.h"
@@ -624,7 +625,8 @@ LMVertexLight MapblockMeshGenerator::lmVertexLight(v3f pos, v3f normal)
 		ls += c.light[o[0]][o[1]].sky * wt;
 	}
 	r.ao = rangelim(b, 0.0f, 1.0f);
-	r.light.block = (s32)lb & 0xFF;
+	// Block light goes above 15 levels with extended light levels
+	r.light.block = (s32)lb;
 	r.light.sky = (s32)ls & 0xFF;
 	return r;
 }
@@ -641,13 +643,16 @@ void lightmap_set_vertex(video::S3DVertex &vertex, u8 c, s32 block, s32 sky)
 {
 	// AO and shade go to the vertex color; tile colors are multiplied in
 	// later, like vanilla's tint
-	block = core::clamp(block, 0, 240);
+	block = core::clamp(block, 0, LIGHT_LIMIT * 16);
 	sky = core::clamp(sky, 0, 240);
 	// The legacy GL driver has no generic attributes: whole light levels
 	// also go into the color alpha
-	u8 legacy = (u8)(((sky + 8) / 16) << 4 | ((block + 8) / 16));
+	u8 legacy = (u8)(((sky + 8) / 16) << 4 | ((std::min(block, 240) + 8) / 16));
 	vertex.Color.set(legacy, c, c, c);
-	vertex.Light[0] = (u8)block;
+	// Block light above level 15 (extended light levels) goes into the
+	// rest of the byte in steps of 3 levels, see lightmapVertexLight()
+	vertex.Light[0] = block <= 240 ? (u8)block :
+			(u8)(240 + (block - 240 + 24) / 48);
 	vertex.Light[1] = (u8)sky;
 }
 
@@ -832,25 +837,31 @@ void MapblockMeshGenerator::drawAutoLightedCuboid(aabb3f box,
 	}
 }
 
+static const v3s16 solid_tile_dirs[6] = {
+	v3s16(0, 1, 0),
+	v3s16(0, -1, 0),
+	v3s16(1, 0, 0),
+	v3s16(-1, 0, 0),
+	v3s16(0, 0, 1),
+	v3s16(0, 0, -1)
+};
+
 void MapblockMeshGenerator::drawSolidNode()
 {
 	u8 faces = 0; // k-th bit will be set if k-th face is to be drawn.
-	static const v3s16 tile_dirs[6] = {
-		v3s16(0, 1, 0),
-		v3s16(0, -1, 0),
-		v3s16(1, 0, 0),
-		v3s16(-1, 0, 0),
-		v3s16(0, 0, 1),
-		v3s16(0, 0, -1)
-	};
+	const v3s16 *tile_dirs = solid_tile_dirs;
 	TileSpec tiles[6];
-	u16 lights[6];
+	u32 lights[6];
 	content_t n1 = cur_node.n.getContent();
 	// Lightmap lighting draws fluids below the node top: a solid node
 	// above doesn't hide their surface
 	const bool lowered_fluid = lightmap() && cur_node.f->drawtype == NDT_LIQUID &&
 			lmFluidHeight(blockpos_nodes + cur_node.p) < 1.0f;
 	for (int face = 0; face < 6; face++) {
+		// FluidRenderer.isFaceOccludedBySelf: the waterlogged node hides
+		// the faces of its liquid it covers
+		if (cur_holder.active && (cur_holder.full_faces & (1 << face)))
+			continue;
 		v3s16 p2 = blockpos_nodes + cur_node.p + tile_dirs[face];
 		MapNode neighbor = data->m_vmanip.getNodeNoEx(p2);
 		content_t n2 = neighbor.getContent();
@@ -864,7 +875,10 @@ void MapblockMeshGenerator::drawSolidNode()
 			if (f2.visuals->solidness == 2 && !(face == 0 && lowered_fluid))
 				continue;
 			if (cur_node.f->drawtype == NDT_LIQUID) {
-				if (cur_node.f->sameLiquidRender(f2))
+				// No face towards the same liquid, held or not
+				const ContentFeatures &fl2 = f2.isWaterlogged() ?
+						nodedef->get(f2.waterlogged_liquid_id) : f2;
+				if (cur_node.f->sameLiquidRender(fl2))
 					continue;
 				backface_culling = f2.visuals->solidness || f2.visuals->visual_solidness;
 			}
@@ -883,6 +897,12 @@ void MapblockMeshGenerator::drawSolidNode()
 		return;
 	u8 mask = faces ^ 0b0011'1111; // k-th bit is set if k-th face is to be *omitted*, as expected by cuboid drawing functions.
 	auto box = aabb3f(v3f(-0.5 * BS), v3f(0.5 * BS));
+	// Like FluidRenderer, keep held liquid faces just inside the node so
+	// they don't fight with the node's own faces
+	if (cur_holder.active) {
+		box.MinEdge += v3f(0.001f * BS);
+		box.MaxEdge -= v3f(0.001f * BS);
+	}
 	box.MinEdge += cur_node.origin;
 	box.MaxEdge += cur_node.origin;
 	if (lightmap()) {
@@ -995,10 +1015,12 @@ void MapblockMeshGenerator::prepareLiquidNodeDrawing()
 	MapNode nbottom = data->m_vmanip.getNodeNoEx(blockpos_nodes + cur_node.p + v3s16(0, -1, 0));
 	cur_liquid.c_flowing = cur_node.f->liquid_alternative_flowing_id;
 	cur_liquid.c_source = cur_node.f->liquid_alternative_source_id;
-	cur_liquid.top_is_same_liquid = (ntop.getContent() == cur_liquid.c_flowing)
-			|| (ntop.getContent() == cur_liquid.c_source);
-	cur_liquid.draw_bottom = (nbottom.getContent() != cur_liquid.c_flowing)
-			&& (nbottom.getContent() != cur_liquid.c_source);
+	const content_t ctop = liquidContentOf(ntop);
+	const content_t cbottom = liquidContentOf(nbottom);
+	cur_liquid.top_is_same_liquid = (ctop == cur_liquid.c_flowing)
+			|| (ctop == cur_liquid.c_source);
+	cur_liquid.draw_bottom = (cbottom != cur_liquid.c_flowing)
+			&& (cbottom != cur_liquid.c_source);
 	if (cur_liquid.draw_bottom) {
 		const ContentFeatures &f2 = nodedef->get(nbottom.getContent());
 		if (f2.visuals->solidness > 1)
@@ -1012,7 +1034,7 @@ void MapblockMeshGenerator::prepareLiquidNodeDrawing()
 	if (cur_node.f->light_source != 0) {
 		// If this liquid emits light and doesn't contain light, draw
 		// it at what it emits, for an increased effect
-		u8 e = decode_light(cur_node.f->light_source);
+		u16 e = decode_light_hdr(cur_node.f->light_source);
 		light = LightPair(std::max(e, light.lightDay),
 				std::max(e, light.lightNight));
 	} else if (nodedef->getLightingFlags(ntop).has_light) {
@@ -1033,7 +1055,7 @@ void MapblockMeshGenerator::getLiquidNeighborhood()
 		LiquidData::NeighborData &neighbor = cur_liquid.neighbors[w + 1][u + 1];
 		v3s16 p2 = cur_node.p + v3s16(u, 0, w);
 		MapNode n2 = data->m_vmanip.getNodeNoEx(blockpos_nodes + p2);
-		neighbor.content = n2.getContent();
+		neighbor.content = liquidContentOf(n2);
 		neighbor.level = -0.5f;
 		neighbor.is_same_liquid = false;
 		neighbor.top_is_same_liquid = false;
@@ -1059,7 +1081,8 @@ void MapblockMeshGenerator::getLiquidNeighborhood()
 		//       doesn't exist
 		p2.Y++;
 		n2 = data->m_vmanip.getNodeNoEx(blockpos_nodes + p2);
-		if (n2.getContent() == cur_liquid.c_source || n2.getContent() == cur_liquid.c_flowing)
+		const content_t c2 = liquidContentOf(n2);
+		if (c2 == cur_liquid.c_source || c2 == cur_liquid.c_flowing)
 			neighbor.top_is_same_liquid = true;
 	}
 }
@@ -1078,9 +1101,9 @@ f32 MapblockMeshGenerator::lmFluidHeight(v3s16 p)
 	const content_t source = cur_node.f->liquid_alternative_source_id;
 	const content_t flowing = cur_node.f->liquid_alternative_flowing_id;
 	MapNode n = data->m_vmanip.getNodeNoEx(p);
-	content_t c = n.getContent();
+	content_t c = liquidContentOf(n);
 	if (c == source || c == flowing) {
-		content_t above = data->m_vmanip.getNodeNoEx(p + v3s16(0, 1, 0)).getContent();
+		content_t above = liquidContentOf(data->m_vmanip.getNodeNoEx(p + v3s16(0, 1, 0)));
 		if (above == source || above == flowing)
 			return 1.0f;
 		if (c == source || (n.param2 & LIQUID_FLOW_DOWN_MASK))
@@ -2327,7 +2350,82 @@ void MapblockMeshGenerator::errorUnknownDrawtype()
 	FATAL_ERROR("Unknown drawtype");
 }
 
+content_t MapblockMeshGenerator::liquidContentOf(MapNode n) const
+{
+	const ContentFeatures &f = nodedef->get(n);
+	return f.isWaterlogged() ? f.waterlogged_liquid_id : n.getContent();
+}
+
+// FluidRenderer.getFaceOcclusionShape of a node holding a liquid
+static NodeShape holder_occlusion_shape(const NodeDefManager *nodedef, MapNode n,
+		const ContentFeatures &f)
+{
+	if (f.visuals->solidness == 2)
+		return NodeShape::block();
+	if (f.alpha != ALPHAMODE_OPAQUE)
+		return NodeShape();
+	std::vector<aabb3f> boxes;
+	if (f.drawtype == NDT_NODEBOX)
+		n.getNodeBoxes(nodedef, &boxes);
+	else if (f.drawtype == NDT_MESH && f.walkable)
+		n.getCollisionBoxes(nodedef, &boxes);
+	return NodeShape::fromBoxes(boxes);
+}
+
+void MapblockMeshGenerator::drawWaterloggedLiquid()
+{
+	const content_t c = cur_node.f->waterlogged_liquid_id;
+	const ContentFeatures &fl = nodedef->get(c);
+	if (!fl.isLiquidRender())
+		return;
+
+	const MapNode holder = cur_node.n;
+	const ContentFeatures *fholder = cur_node.f;
+	const NodeShape shape = holder_occlusion_shape(nodedef, holder, *fholder);
+	cur_holder.full_faces = 0;
+	for (int face = 0; face < 6; face++) {
+		if (shape_face_full(shape, solid_tile_dirs[face]))
+			cur_holder.full_faces |= 1 << face;
+	}
+	if (cur_holder.full_faces == 0b0011'1111)
+		return;
+
+	// Draw the liquid as a source node with the holder's light; digging
+	// cracks belong to the holder only
+	cur_holder.active = true;
+	cur_node.n = MapNode(c, holder.param1, 0);
+	cur_node.f = &fl;
+	const v3s16 crack_pos = data->m_crack_pos_relative;
+	data->m_crack_pos_relative = v3s16(-1337, -1337, -1337);
+
+	if (fl.drawtype == NDT_LIQUID) {
+		drawSolidNode();
+	} else {
+		if (lightmap()) {
+			lmSetupNode();
+		} else if (data->m_smooth_lighting) {
+			getSmoothLightFrame();
+		} else {
+			auto light = LightPair(getInteriorLight(cur_node.n, 0, nodedef));
+			cur_node.lcolor = encode_light(light, cur_node.f->light_source);
+		}
+		drawLiquidNode();
+	}
+
+	data->m_crack_pos_relative = crack_pos;
+	cur_node.n = holder;
+	cur_node.f = fholder;
+	cur_holder.active = false;
+}
+
 void MapblockMeshGenerator::drawNode()
+{
+	drawNodeBody();
+	if (cur_node.f->isWaterlogged())
+		drawWaterloggedLiquid();
+}
+
+void MapblockMeshGenerator::drawNodeBody()
 {
 	cur_node.origin = intToFloat(cur_node.p, BS);
 	switch (cur_node.f->drawtype) {

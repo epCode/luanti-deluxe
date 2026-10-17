@@ -47,6 +47,7 @@ set(client_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/clientobject.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/clouds.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/content_cao.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/transform_interpolation.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/content_cso.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/content_mapblock.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/filecache.cpp
@@ -62,6 +63,8 @@ set(client_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/keycode.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/lightmap.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/minecraft_animator.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/minecraft_keyframe_animation.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/minecraft_warden_animator.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/localplayer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mapblock_mesh.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mesh.cpp
@@ -83,6 +86,7 @@ set(client_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/dynamicshadows.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/dynamicshadowsrender.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/pointlightshadows.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/shadows/pointshadowentities.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/shadowsshadercallbacks.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/shadowsScreenQuad.cpp
 	PARENT_SCOPE

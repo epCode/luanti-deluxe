@@ -150,16 +150,29 @@ void main(void)
 		// Lightmap lighting (Minecraft entity.vsh): materialColor holds the
 		// block and sky light at the eye, see lightmap_object_light()
 		vec2 light = floor(materialColor.rg * 15.0 + 0.5);
-		vec3 light_color = lightmapSample(light);
+		// Emissive layers (blue 1) don't use the lightmap and have the
+		// alpha of the material color (Minecraft's EMISSIVE entity shader
+		// with translucent blending). Otherwise blue holds the block light
+		// above level 15 (extended light levels).
+		bool emissive = materialColor.b > 0.5;
+		float overbright = emissive ? 1.0 :
+			lightmapOverbright(15.0 + floor(materialColor.b * 255.0 + 0.5));
+		vec3 light_color = lightmapSample(light) * overbright;
+		if (emissive)
+			light_color = vec3(1.0);
 #if defined(ENABLE_DYNAMIC_SHADOWS) || defined(ENABLE_POINT_SHADOWS)
 		// What the sky and the block light add, for shadows to take away
-		varSkyLight = color.rgb * (light_color - lightmapSample(vec2(light.x, 0.0)));
+		varSkyLight = color.rgb * (light_color - lightmapSample(vec2(light.x, 0.0)) * overbright);
 		varBlockLight = color.rgb * (light_color - lightmapSample(vec2(0.0, light.y)));
+		if (emissive) {
+			varSkyLight = vec3(0.0);
+			varBlockLight = vec3(0.0);
+		}
 #endif
 		color.rgb *= light_color;
-		color.a = 1.0;
+		color.a = emissive ? materialColor.a : 1.0;
 		nightRatio = 0.0;
-		varColor = clamp(color, 0.0, 1.0);
+		varColor = clamp(color, 0.0, max(1.0, overbright));
 #if (MATERIAL_TYPE != TILE_MATERIAL_PLAIN) && (MATERIAL_TYPE != TILE_MATERIAL_PLAIN_ALPHA)
 		// minecraft_mix_light: two directional lights (Lighting.java), with
 		// Minecraft's -Z north turned into Luanti's +Z north
@@ -178,6 +191,9 @@ void main(void)
 #endif
 	color *= materialColor;
 
+	// Light brighter than the classic maximum (extended light levels)
+	// may go up to twice the usual brightness, see the node shader
+	vec3 max_color = max(vec3(1.0), color.rgb * 2.0);
 	// The alpha gives the ratio of sunlight in the incoming light.
 	nightRatio = 1.0 - color.a;
 	color.rgb = color.rgb * (color.a * dayLight.rgb +
@@ -190,7 +206,7 @@ void main(void)
 	color.b += max(0.0, 0.021 - abs(0.2 * brightness - 0.021) +
 		0.07 * brightness);
 
-	varColor = clamp(color, 0.0, 1.0);
+	varColor = vec4(clamp(color.rgb, vec3(0.0), max_color), clamp(color.a, 0.0, 1.0));
 	}
 
 

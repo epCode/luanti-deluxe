@@ -194,12 +194,11 @@ The game directory can contain the following files:
       * Without it the day light bank holds the brighter of sunlight and
         artificial light, so sky light can't be told apart where artificial
         light is at least as bright.
-      * With it, light sources may emit light level 15
-        (`core.LIGHT_SOURCE_MAX`), and players are rendered with the lightmap
-        lighting model by default (see `lightmap` in `set_lighting`).
+      * With it, players are rendered with the lightmap lighting model by
+        default (see `lightmap` in `set_lighting`).
       * Gameplay APIs are unaffected: `core.get_node_light` and the like
         report the same values as before. Mods reading `param1` directly see
-        the sky light alone in its low 4 bits.
+        the sky light alone in its day bank (see [Light levels](#light-levels)).
       * Maps saved with the other layout are converted when loaded. Sky light
         that was hidden by brighter artificial light becomes darkness until
         lighting there is updated (e.g. with `core.fix_light`).
@@ -1582,8 +1581,8 @@ The function of `param1` is determined by `paramtype` in node definition.
 `param1` is reserved for the engine when `paramtype != "none"`.
 
 * `paramtype = "light"`
-    * The value stores light with and without sun in its lower and upper 4 bits
-      respectively.
+    * The value stores light with and without sun (the day and night banks)
+      in its lower and upper 6 bits respectively, see [Light levels](#light-levels).
     * Required by a light source node to enable spreading its light.
     * Required by the following drawtypes as they determine their visual
       brightness from their internal light value:
@@ -1602,6 +1601,29 @@ The function of `param1` is determined by `paramtype` in node definition.
 
 The function of `param2` is determined by `paramtype2` in node definition.
 `param2` is reserved for the engine when `paramtype2 != "none"`.
+
+Light levels
+------------
+
+Light levels go from `0` to `core.LIGHT_SOURCE_MAX` (`60`).
+
+* Levels up to `core.LIGHT_MAX` (`14`) are the classic ones. Brighter levels
+  reach further (light drops by 1 per node, so a `light_source` of `60` lights
+  up nodes 59 nodes away) and are rendered brighter, with diminishing steps,
+  up to about twice the brightness of level `14` at level `60`.
+* Direct sunlight is reported as level `15`. It spreads sideways as level
+  `14`, like before.
+* Light-related APIs (`core.get_node_light`, `light_source`, `glow` of
+  particles and entities, ...) use these levels. `glow` doesn't raise light
+  above level `15`.
+* In `param1` of `paramtype = "light"` nodes, the day bank (sunlight and
+  light sources, or only sky light with `separate_sky_light`) is
+  `param1 % 64` and the night bank (light sources) is
+  `math.floor(param1 / 64) % 64`. Direct sunlight is stored as `61` in the
+  day bank.
+* Map data saved by older versions, which stored 4 bits per bank, is
+  converted when loaded. When the map is sent to an older client, light
+  above `14` is sent as `14`.
 
 * `paramtype2 = "flowingliquid"`
     * Used by `drawtype = "flowingliquid"` and `liquidtype = "flowing"`
@@ -5753,18 +5775,20 @@ Methods
 * `update_map()`: Does nothing, kept for compatibility.
 * `set_lighting(light, [p1, p2])`: Set the lighting within the `VoxelManip` to
   a uniform value.
-    * `light` is a table, `{day=<0...15>, night=<0...15>}`
+    * `light` is a table, `{day=<0...60>, night=<0...60>}`. A `day` value
+      of `15` is direct sunlight.
     * To be used only by a `VoxelManip` object from
       `core.get_mapgen_object`.
     * (`p1`, `p2`) is the area in which lighting is set, defaults to the whole
       area if left out.
 * `get_light_data([buffer])`: Gets the light data read into the
   `VoxelManip` object
-    * Returns an array (indices 1 to volume) of integers ranging from `0` to
-      `255`.
-    * Each value is the bitwise combination of day and night light values
-      (`0` to `15` each).
-    * `light = day + (night * 16)`
+    * Returns an array (indices 1 to volume) of the `param1` values,
+      integers ranging from `0` to `4095`.
+    * For nodes with light, each value is the bitwise combination of day and
+      night light values (`0` to `60` each, `61` for direct sunlight, see
+      [Light levels](#light-levels)).
+    * `light = day + (night * 64)`
     * If the param `buffer` is present, this table will be used to store the
       result instead.
 * `set_light_data(light_data)`: Sets the `param1` (light) contents of each node
@@ -6612,6 +6636,27 @@ Call these functions only at load time!
       {light_source=core.LIGHT_MAX}, {"sounds"})`:
       Overwrites the `light_source` field,
       removes the sounds from the definition of the mese block.
+    * Overriding a dry node also overrides its waterlogged form (except
+      fields that differ between the two, like `waterlogged_*`, `drop`,
+      `node_dig_prediction` and the liquid physics fields).
+* `core.register_waterlogged_alternative(name, liquid, overrides)`
+    * Registers the waterlogged form of the node `name`, holding the liquid
+      source `liquid`, and links both (`waterlogged_liquid`,
+      `waterlogged_alternative`). Returns the waterlogged node's name.
+    * The waterlogged form is a copy of the node's current definition with
+      groups `waterlogged = 1` and `not_in_creative_inventory = 1`, the dry
+      node as drop (unless the node has its own `drop`), the liquid as
+      `node_dig_prediction`, and the liquid's movement and view fields
+      (`liquid_move_physics`, `move_resistance`, `drowning`,
+      `post_effect_color`, `post_effect_color_shaded`; no
+      `sunlight_propagates` unless both have it). Both forms are not
+      `floodable`.
+    * `overrides` (optional) are applied to the waterlogged definition;
+      `overrides.name` sets its name (default `name .. "_waterlogged"`).
+    * Builtin placement (`core.item_place_node`) waterlogs a node placed
+      into a source of its liquid; digging a waterlogged node leaves the
+      liquid; a waterlogged falling node leaves the liquid and lands dry
+      (or waterlogged again in a source).
 * `core.unregister_item(name)`
     * Unregisters the item from the engine, and deletes the entry with key
       `name` from `core.registered_items` and from the associated item table
@@ -7074,7 +7119,8 @@ Environment access
       to get the light value of a neighbor.
     * `pos`: The position where to measure the light.
     * `timeofday`: `nil` for current time, `0` for night, `0.5` for day
-    * Returns an integer in range [0, 15] or `nil`
+    * Returns an integer in range [0, 60] or `nil`, see [Light levels](#light-levels).
+      Direct sunlight is `15`.
     * `nil` is returned e.g. when the map isn't loaded at `pos`
 * `core.get_natural_light(pos[, timeofday])`
     * Figures out the sunlight (or moonlight) value at pos at the given time of
@@ -7088,9 +7134,9 @@ Environment access
     * Calculates the artificial light (light from e.g. torches) value from the
       `param1` integer value.
     * `param1`: The param1 value of a `paramtype = "light"` node.
-    * Returns an integer between `0` and `15`
-    * Currently it's the same as `math.floor(param1 / 16)`, except that it
-      ensures compatibility.
+    * Returns an integer between `0` and `60`
+    * Currently it's the same as `math.floor(param1 / 64) % 64` (see
+      [Light levels](#light-levels)), except that it ensures compatibility.
 * `core.place_node(pos, node[, placer])`
     * Place node with the same effects that a player would cause
     * `placer`: The ObjectRef that places the node (optional)
@@ -7384,6 +7430,24 @@ Environment access
       VoxelManip object `vmanip` instead of the map.
 * `core.transforming_liquid_add(pos)`
     * add node to liquid flow update queue
+* `core.get_node_liquid(node)`
+    * The liquid in a node (a node table or name): returns the liquid's
+      source name and whether it is a source (`true` for liquid sources and
+      waterlogged nodes, `false` for flowing liquid), or `nil`.
+* `core.get_waterlogged_node(name, liquid)`
+    * The waterlogged form of the dry node `name` holding the liquid source
+      `liquid`, or `nil` if it can't hold it.
+* `core.place_liquid(pos, liquid)`
+    * Puts a source of `liquid` into the node at `pos` if it can hold it
+      (swaps in its waterlogged form, keeping param2 and metadata).
+    * Returns `true` on success.
+* `core.pickup_liquid(pos)`
+    * Takes the liquid out of the waterlogged node at `pos` (swaps in its
+      dry form). Returns the liquid source name, or `nil`.
+* `core.remove_node_keep_liquid(pos)`
+    * Removes the node at `pos`, leaving a waterlogged node's liquid behind.
+      `core.node_dig`, falling nodes and dropped attached nodes use this.
+    * Returns the liquid left behind, or `nil`.
 * `core.get_node_max_level(pos)`
     * get max available level for leveled node
 * `core.get_node_level(pos)`
@@ -9173,11 +9237,29 @@ child will follow movement and rotation of that bone.
     * `sleep_yaw`: yaw of the bed while sleeping, in degrees
     * `use_duration`: charging time of a crossbow, in seconds (default 1.25)
     * `swing_duration`: length of an arm swing in ticks of 1/20 s (default 6)
-    * `look_pitch`: look pitch in radians. Set by the engine for players.
+    * `look_pitch`: look pitch in radians, positive looks down. Set by the
+      engine for players.
+    * `pose`: Minecraft's entity pose, one of `"standing"` (default),
+      `"emerging"`, `"digging"`, `"roaring"`, `"sniffing"`. With
+      `"minecraft_warden"` a change starts the pose's animation (emerge
+      6.68 s, dig 5 s, roar 4.2 s, sniff 4.16 s); an object that appears
+      in a pose other than `"standing"` starts its animation then.
+    * `anger`: anger level, integer 0 to 65535 (Minecraft's warden: 0 to
+      150). `"minecraft_warden"`: the heart beats every
+      `40 - floor(min(anger / 80, 1) * 30)` ticks of 1/20 s.
+    * `head_yaw`: yaw of the head relative to the object's yaw, in radians,
+      positive turns left (like the object's yaw). Changes are approached
+      in 3 ticks, like Minecraft's head rotation updates.
 * `get_animation_state()`: returns the state in the above format
 * `swing_arm()`: swings the object's arm once (procedural animation). For
   players with the `"minecraft_player"` animation, the engine swings the arm
   when they hit objects, use items or place nodes.
+* `entity_event(id)`: sends Minecraft's entity event `id` (integer 0 to
+  255, `Level.broadcastEntityEvent`) to the clients that see the object,
+  for its procedural animation. `"minecraft_warden"`: `4` attack (stops
+  the roar animation, plays the attack animation), `61` tendril twitch
+  (the tendrils glow and wave for 10 ticks), `62` sonic boom animation.
+  Other ids are ignored.
 * `set_properties(object property table)`
 * `get_properties()`: returns a table of all object properties
 * `set_observers(observers)`: sets observers (players this object is sent to)
@@ -10561,6 +10643,55 @@ Player properties need to be saved manually.
     --   Minecraft's items in hand. The animation follows the object's
     --   movement and look direction and the state set with
     --   `ObjectRef:set_animation_state`. Bone overrides apply on top.
+    -- "minecraft_warden": Minecraft's warden (Java Edition 26.3: WardenModel,
+    --   WardenAnimation, WardenRenderer). The mesh needs the joints "bone",
+    --   "body", "head", "right_tendril", "left_tendril", "right_ribcage",
+    --   "left_ribcage", "right_arm", "left_arm", "right_leg", "left_leg"
+    --   with Minecraft's part hierarchy and pivots, and six mesh buffers:
+    --   the model and the five emissive layers (bioluminescent, pulsating
+    --   spots 1 and 2, tendrils, heart), see
+    --   games/mineclonia/tools/mc_warden_model.py. The client animates the
+    --   walk from the object's movement (the object's yaw is the body's),
+    --   the head look (`head_yaw`, `look_pitch`), the idle wobble, the
+    --   heartbeat (`anger`), the tendrils and, on `pose` changes and
+    --   `ObjectRef:entity_event`, Minecraft's keyframe animations. The
+    --   emissive layers are drawn translucent and not darkened by the light
+    --   (only with lightmap lighting, see `set_lighting`; otherwise layers
+    --   at alpha 0.5 and more are drawn opaque). Bone overrides apply on top.
+
+    transform_interpolation = false,
+    -- If true, clients interpolate the object's whole visual transform
+    -- between server updates: position (cubic, using the sent velocity),
+    -- rotation on all axes (quaternion), `visual_size` changes and changes
+    -- of the attachment position/rotation (`set_attach` again with the same
+    -- parent and bone). Updates are played back on a clock that follows the
+    -- server's step timestamps, about one server step (plus network jitter)
+    -- behind, so movement and turning look smooth at any server tick rate
+    -- (`dedicated_server_step`). The server then sends an update at every
+    -- send opportunity in which the object moved or turned at all, instead
+    -- of only after larger changes.
+    -- Physical objects are not predicted by the client in this mode, so the
+    -- shown position is always one the server computed.
+    -- Players attached to the object follow it smoothly as well.
+
+    turn_attached_players = false,
+    -- If true, a player attached to this object (directly, or through other
+    -- attached objects such as a seat) turns their view with it: when the
+    -- object's shown yaw changes, the same change is added to the player's
+    -- look direction, like riding a Minecraft boat. Done by the client, so
+    -- the view turns smoothly and without network delay.
+
+    attached_player_yaw_limit = 0,
+    -- If > 0, the look direction of players attached to this object
+    -- (directly or through other objects) is kept within this many degrees
+    -- left and right of the object's yaw. 0 means no limit.
+
+    liquid_mask_box = nil,
+    -- {xmin, ymin, zmin, xmax, ymax, zmax} in nodes, relative to the object
+    -- and turning with it (not scaled by `visual_size`). Liquids are not
+    -- drawn inside this box, so e.g. a boat floating low in the water stays
+    -- dry inside (Minecraft's boat "water patch"). Clients handle the 8
+    -- objects with this property nearest to the player; needs shaders.
 }
 ```
 
@@ -10898,9 +11029,9 @@ Used by `core.register_node`, `core.register_craftitem`, and
     light_source = 0,
     -- When used for nodes: Defines amount of light emitted by node.
     -- Otherwise: Defines texture glow when viewed as a dropped item
-    -- To set the maximum, use the value 'core.LIGHT_SOURCE_MAX': 14, or 15
-    -- in games with `separate_sky_light` (see `game.conf`).
-    -- 'core.LIGHT_MAX' is always 14, the brightest light that isn't sunlight.
+    -- Levels up to 'core.LIGHT_MAX' (14) are the classic ones, brighter
+    -- levels up to 'core.LIGHT_SOURCE_MAX' (60) reach further and look
+    -- brighter, see "Light levels".
     -- Values above the maximum are reduced to it.
 
     -- See "Tool Capabilities" section for an example including explanation
@@ -11329,6 +11460,33 @@ Used by `core.register_node`.
     -- Example:
     --   {{y_min = -29067, y_max = -28811,
     --     tick_delay = 10, drop_off = 1, slope_find_distance = 4}}
+
+    waterlogged_liquid = "",
+    waterlogged_alternative = "",
+    -- Waterlogging (Minecraft's waterlogged block states). A waterlogged
+    -- node is a second node holding a liquid source, e.g. a slab with
+    -- water in it; `core.register_waterlogged_alternative` registers one.
+    -- * On a waterlogged node, `waterlogged_liquid` names the liquid source
+    --   it holds and `waterlogged_alternative` the dry node it turns into
+    --   when the liquid is taken out.
+    -- * On a dry node, `waterlogged_alternative` names its waterlogged form;
+    --   the node then can hold that liquid (a "liquid container").
+    -- A waterlogged node acts as a source of its liquid: it is drawn inside
+    -- the node (liquid faces the node covers completely are left out), the
+    -- liquid flows out of it, and neighbouring liquid treats it as a source.
+    -- With `liquid_model = "minecraft"`:
+    --   * Liquid only passes between two nodes if their collision boxes
+    --     don't cover the face between them together (e.g. no water flows
+    --     down out of a bottom slab, or through the back of a stair).
+    --   * Flowing liquid never enters liquid containers. A source of the
+    --     right liquid that would form in one (between two sources)
+    --     waterlogs it instead.
+    -- Mapgen and schematics: a liquid container placed over a source of its
+    -- liquid is placed waterlogged.
+
+    waterloggable = "",
+    -- Liquid source name: registers the waterlogged form of this node
+    -- right away (`core.register_waterlogged_alternative(name, liquid)`).
 
     drowning = 0,
     -- Player will take this amount of damage if no bubbles are left
@@ -12611,6 +12769,13 @@ Used by `core.add_particle`.
     vertical = false,
     -- If true faces player using y axis only
 
+    rotation = {x = 0, y = 0, z = 0},
+    -- Optional. If set, the particle is not a billboard facing the camera but
+    -- a flat quad with a fixed orientation in world space (`vertical` is then
+    -- ignored). See "Rotated particles" below.
+    -- Alternatively `rotation_tween = {{x=...}, {x=...}, style=..., reps=..., start=...}`
+    -- (same format as `alpha_tween`) animates the rotation over the particle's lifetime.
+
     texture = "image.png",
     -- The texture of the particle
     -- v5.6.0 and later: also supports the table format described in the
@@ -12655,6 +12820,40 @@ Used by `core.add_particle`.
     -- v5.6.0 and later: Optional bounce range, consult the following section
 }
 ```
+
+### Rotated particles
+
+The `rotation` field (Particle and ParticleSpawner definitions) turns a particle
+into a flat textured quad with a fixed world orientation instead of a camera-facing
+billboard (e.g. Minecraft's shriek rings and vibration signals).
+
+* `rotation` is `{x = pitch, y = yaw, z = roll}` in radians, with the same meaning
+  as `ObjectRef:set_rotation`. A particle with a given rotation is oriented
+  exactly like an `upright_sprite` object that has `set_rotation` called with
+  that rotation. The quad is centered on the particle position; its edge length
+  is `size` (same scale as for billboard particles: `size = 10` is one node).
+* With `rotation = {x = 0, y = 0, z = 0}` the quad lies in the X-Y plane, the
+  texture's top points towards +Y and its front faces +Z, i.e. it reads correctly
+  for a viewer standing on the +Z side looking towards -Z.
+  For example `{x = math.pi / 2, y = 0, z = 0}` makes it lie flat with its front
+  facing up (+Y) and the texture's top pointing towards -Z;
+  `{x = 0, y = math.pi / 2, z = 0}` makes it stand upright with its front
+  facing -X.
+* The quad is visible from both sides. Seen from the back, the texture is mirrored
+  back so that it reads the same way as from the front (like the back face of an
+  `upright_sprite`). There is no separate back texture.
+* `size`, texture animations, `glow`, `blend`, `alpha_tween`/`scale_tween`
+  (`scale.x` scales the quad's local X axis, `scale.y` its local Y axis),
+  collisions and all motion parameters work as for billboard particles.
+  The collision box is unaffected by the rotation.
+* `rotation_tween` interpolates the Euler angles linearly over the lifetime of
+  each particle (not over the lifetime of the spawner, unlike the other
+  spawner tweens).
+* In particle spawners, every spawned particle gets the same `rotation`
+  (or `rotation_tween`). The rotation is in world space, also for spawners that
+  are `attached` to an object.
+* Clients that do not support this field (all upstream Luanti versions) ignore
+  it and show billboard particles.
 
 
 `ParticleSpawner` definition
@@ -12711,6 +12910,11 @@ will be ignored.
 
     vertical = false,
     -- If true face player using y axis only
+
+    rotation = {x = 0, y = 0, z = 0},
+    -- Optional. Fixed world orientation for all spawned particles instead of
+    -- facing the camera. `rotation_tween` is also accepted and animates over
+    -- each particle's lifetime. See "Rotated particles" above.
 
     texture = "image.png",
     -- The texture of the particle

@@ -227,6 +227,29 @@ void ServerParticleTexture::deSerialize(std::istream &is, u16 protocol_ver,
 		animation.deSerialize(is, protocol_ver);
 }
 
+enum class ParticleAppendedFlags : u8 {
+	// a fixed `rotation` (tween) follows
+	rotated = 1,
+};
+
+void CommonParticleParams::serializeAppendedFields(std::ostream &os) const
+{
+	u8 flags = 0;
+	if (rotated)
+		flags |= u8(ParticleAppendedFlags::rotated);
+	writeU8(os, flags);
+	if (rotated)
+		rotation.serialize(os);
+}
+
+void CommonParticleParams::deSerializeAppendedFields(std::istream &is)
+{
+	u8 flags = readU8(is);
+	rotated = flags & u8(ParticleAppendedFlags::rotated);
+	if (rotated)
+		rotation.deSerialize(is);
+}
+
 void ParticleParameters::serialize(std::ostream &os, u16 protocol_ver) const
 {
 	writeV3F32(os, pos);
@@ -248,6 +271,7 @@ void ParticleParameters::serialize(std::ostream &os, u16 protocol_ver) const
 	jitter.serialize(os);
 	bounce.serialize(os);
 	texture.serialize(os, protocol_ver, true, true);
+	serializeAppendedFields(os);
 }
 
 void ParticleParameters::deSerialize(std::istream &is, u16 protocol_ver)
@@ -286,4 +310,10 @@ void ParticleParameters::deSerialize(std::istream &is, u16 protocol_ver)
 	// >= 5.9.0-dev
 
 	texture.deSerialize(is, protocol_ver, true, true);
+
+	if (!canRead(is))
+		return;
+	// >= Luanti Deluxe (fixed particle rotation)
+
+	deSerializeAppendedFields(is);
 }

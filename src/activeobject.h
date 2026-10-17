@@ -64,6 +64,7 @@ enum ActiveObjectCommand : u8 {
 	AO_CMD_STOP_ANIMATION,
 	AO_CMD_SET_ANIMATION_STATE,
 	AO_CMD_SWING_ARM,
+	AO_CMD_ENTITY_EVENT,
 	// When adding new commands, update Server::AsyncRunStep()
 	// to drop newer commands for older clients
 };

@@ -513,6 +513,7 @@ set(common_SRCS
 	serverenvironment.cpp
 	servermap.cpp
 	liquid_minecraft.cpp
+	waterlogging.cpp
 	translation.cpp
 	version.cpp
 	voxel.cpp

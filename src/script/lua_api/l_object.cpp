@@ -662,6 +662,19 @@ int ObjectRef::l_set_animation_state(lua_State *L)
 	if (getintfield(L, 2, "swing_duration", swing))
 		state.swing_duration = rangelim(swing, 1, 255);
 	getfloatfield(L, 2, "look_pitch", state.look_pitch);
+	{
+		std::string name;
+		if (getstringfield(L, 2, "pose", name)) {
+			AnimationState::Pose p = AnimationState::poseFromName(name);
+			if (p == AnimationState::POSE_COUNT)
+				throw LuaError("Unknown pose: " + name);
+			state.pose = p;
+		}
+	}
+	int anger = state.anger;
+	if (getintfield(L, 2, "anger", anger))
+		state.anger = rangelim(anger, 0, 65535);
+	getfloatfield(L, 2, "head_yaw", state.head_yaw);
 	sao->setAnimationState(state);
 	return 0;
 }
@@ -676,7 +689,7 @@ int ObjectRef::l_get_animation_state(lua_State *L)
 		return 0;
 
 	const AnimationState state = sao->getAnimationState();
-	lua_createtable(L, 0, 15);
+	lua_createtable(L, 0, 18);
 	auto set_bool = [L](const char *name, bool v) {
 		lua_pushboolean(L, v);
 		lua_setfield(L, -2, name);
@@ -706,6 +719,12 @@ int ObjectRef::l_get_animation_state(lua_State *L)
 	lua_setfield(L, -2, "swing_duration");
 	lua_pushnumber(L, state.look_pitch);
 	lua_setfield(L, -2, "look_pitch");
+	lua_pushstring(L, AnimationState::poseName(state.pose));
+	lua_setfield(L, -2, "pose");
+	lua_pushinteger(L, state.anger);
+	lua_setfield(L, -2, "anger");
+	lua_pushnumber(L, state.head_yaw);
+	lua_setfield(L, -2, "head_yaw");
 	return 1;
 }
 
@@ -718,6 +737,21 @@ int ObjectRef::l_swing_arm(lua_State *L)
 	if (sao == nullptr)
 		return 0;
 	sao->swingArm();
+	return 0;
+}
+
+// entity_event(self, id)
+int ObjectRef::l_entity_event(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+	ObjectRef *ref = checkObject<ObjectRef>(L, 1);
+	ServerActiveObject *sao = getobject(ref);
+	if (sao == nullptr)
+		return 0;
+	int id = luaL_checkinteger(L, 2);
+	if (id < 0 || id > 255)
+		throw LuaError("entity_event: id must be 0 to 255");
+	sao->entityEvent(id);
 	return 0;
 }
 
@@ -3688,6 +3722,7 @@ luaL_Reg ObjectRef::methods[] = {
 	luamethod(ObjectRef, set_animation_state),
 	luamethod(ObjectRef, get_animation_state),
 	luamethod(ObjectRef, swing_arm),
+	luamethod(ObjectRef, entity_event),
 
 	luamethod(ObjectRef, play_animation),
 	luamethod(ObjectRef, update_animation),

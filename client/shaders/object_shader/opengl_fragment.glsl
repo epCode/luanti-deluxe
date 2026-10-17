@@ -61,6 +61,9 @@ VARYING_ mediump vec3 varSkyLight;
 VARYING_ mediump vec3 varBlockLight;
 #endif
 
+// Entities are written into the point shadow volume themselves (voxel
+// entity shadows)
+#define POINT_SHADOW_OBJECT_RECEIVER
 #include "shadow/pixel_shadows.glsl"
 
 #ifdef ENABLE_DYNAMIC_SHADOWS
@@ -527,7 +530,8 @@ void main(void)
 	// fog color's brightest value. We then blend our base color with this to make the fog.
 	col = mix(fogColor * pow(fogColor / fogColorMax, vec4(2.0 * clarity)), col, clarity);
 	}
-	col = vec4(col.rgb, base.a);
+	// varColor.a is 1 except for emissive layers (lightmap lighting)
+	col = vec4(col.rgb, base.a * varColor.a);
 
 	gl_FragColor = col;
 }

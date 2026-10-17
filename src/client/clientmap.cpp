@@ -1174,6 +1174,13 @@ void ClientMap::renderMap(video::IVideoDriver* driver, s32 pass)
 				layer.MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
 				layer.MagFilter = video::ETMAGF_NEAREST;
 				layer.AnisotropicFilter = 0;
+				auto &map_layer = material.TextureLayers[PointLightShadows::ENTITY_MAP_LAYER];
+				map_layer.Texture = point_shadows->getEntityMapTexture();
+				map_layer.MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
+				map_layer.MagFilter = video::ETMAGF_NEAREST;
+				map_layer.TextureWrapU = video::ETC_CLAMP_TO_EDGE;
+				map_layer.TextureWrapV = video::ETC_CLAMP_TO_EDGE;
+				map_layer.AnisotropicFilter = 0;
 			}
 
 			driver->setMaterial(material);
@@ -1182,8 +1189,10 @@ void ClientMap::renderMap(video::IVideoDriver* driver, s32 pass)
 				++array_texture_use;
 
 			material.TextureLayers[ShadowRenderer::TEXTURE_LAYER_SHADOW].Texture = nullptr;
-			if (point_shadows)
+			if (point_shadows) {
 				material.TextureLayers[PointLightShadows::TEXTURE_LAYER].Texture = nullptr;
+				material.TextureLayers[PointLightShadows::ENTITY_MAP_LAYER].Texture = nullptr;
+			}
 		}
 
 		m.setTranslation(descriptor.m_pos);
@@ -1332,7 +1341,7 @@ static bool getVisibleBrightness(Map *map, const v3f &p0, v3f dir, float step,
 		}
 
 		if (distance >= sunlight_min_d && !*sunlight_seen && !nonlight_seen)
-			if (n.getLight(LIGHTBANK_DAY, f) == LIGHT_SUN)
+			if (n.isSunlit(f))
 				*sunlight_seen = true;
 		noncount = 0;
 		brightness_sum += decode_light(n.getLightBlend(daylight_factor, f));

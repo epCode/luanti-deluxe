@@ -8,6 +8,8 @@
 #include "irr_v3d.h"
 #include "irr_aabb3d.h"
 #include "constants.h"
+#include <matrix4.h>
+#include <array>
 #include <string>
 #include <memory>
 #include <unordered_map>
@@ -17,6 +19,11 @@
 namespace video {
 	class IVideoDriver;
 	class ITexture;
+}
+namespace scene {
+	class ISceneNode;
+	class IMesh;
+	class IMeshBuffer;
 }
 class Client;
 class IWritableShaderSource;
@@ -38,6 +45,17 @@ class NodeDefManager;
 	  texel is (x, y, z, light level) relative to the volume origin; level 0
 	  ends the list.
 
+	Entities cast shadows in one of these ways (point_light_entity_shadows),
+	from the cheapest to the most expensive:
+
+	- boxes: the boxes of the entities' bones (or of their meshes) go to the
+	  shaders, which test each ray against them.
+	- voxels: the entities' triangles are rasterized into the sub-voxels of
+	  the volume every frame, on top of a CPU copy of the map's occupancy.
+	- shadowmaps: the light sources nearest to the camera that reach an
+	  entity render the entities' distance from them into the six cube faces
+	  of a slot of an atlas (texture layer ENTITY_MAP_LAYER).
+
 	See client/shaders/shadow/pixel_shadows.glsl for the shader side.
 */
 class PointLightShadows
@@ -45,6 +63,19 @@ class PointLightShadows
 public:
 	// Material texture layer the volume is bound to
 	static constexpr u32 TEXTURE_LAYER = 2;
+	// Material texture layer of the entity shadow map atlas
+	static constexpr u32 ENTITY_MAP_LAYER = 4;
+
+	// Entity boxes sent to the shaders at most
+	static constexpr u32 MAX_BOXES = 32;
+	// Light sources with entity shadow maps, and their face size in pixels
+	static constexpr u32 MAP_LIGHTS = 6;
+	static constexpr u32 MAP_FACE_SIZE = 256;
+	// Distance covered by the shadow maps (scene units): the farthest a
+	// light source reaches
+	static constexpr f32 MAP_FAR = LIGHT_LIMIT * BS;
+
+	enum class EntityMode : u8 { None, Boxes, Voxels, ShadowMaps };
 
 	// Volume size in map blocks and nodes along each axis (power of two)
 	static constexpr s16 VOLUME_BLOCKS = 8;
@@ -79,6 +110,17 @@ public:
 	void update(v3f camera_pos, v3s16 camera_offset);
 
 	video::ITexture *getTexture() const { return m_texture; }
+	/// Entity shadow map atlas, if any
+	video::ITexture *getEntityMapTexture() const { return m_entity_map; }
+
+	EntityMode getEntityMode() const { return m_entity_mode; }
+	/// Box matrix rows for the shaders, 3 vec4 per box, MAX_BOXES boxes
+	const std::vector<f32> &getEntityBoxes() const { return m_box_rows; }
+	u32 getEntityBoxCount() const { return m_box_count; }
+	/// Shadow mapped light sources (volume coordinates, w = 1 if used)
+	const std::array<f32, 4 * MAP_LIGHTS> &getEntityMapLights() const { return m_map_lights; }
+	/// Projections of the cube faces, from the light source (scene units)
+	const std::array<f32, 16 * 6> &getEntityMapFaces() const { return m_map_faces; }
 
 	/// Corner of the volume in scene coordinates (BS units)
 	v3f getOriginScene() const { return m_origin_scene; }
@@ -91,6 +133,30 @@ public:
 	/// x + 4 * y + 16 * z is set if a box covers at least half of that 1/4
 	/// node cube along each axis
 	static u64 computeBoxMask(const std::vector<aabb3f> &boxes);
+
+	/// Rows of the matrix that takes volume coordinates (nodes, from the
+	/// volume corner at volume_origin_scene) into [-1, 1]^3 for the box,
+	/// which is transformed by box_transform (to scene coordinates)
+	static void computeBoxRows(const aabb3f &box, const core::matrix4 &box_transform,
+			v3f volume_origin_scene, f32 rows[12]);
+
+	/// Which texels of a texture are opaque (alpha >= 0.5)
+	struct AlphaMask {
+		u32 width = 0, height = 0;
+		std::vector<bool> opaque; // empty: all opaque
+		bool any_opaque = true;
+		bool isOpaque(v2f uv) const;
+		// Whether any of a few samples of a triangle is opaque
+		bool isTriangleOpaque(v2f a, v2f b, v2f c) const;
+	};
+
+	/// Sets the sub-voxels (bit x + 4 * y + 16 * z of the node mask) whose
+	/// centers lie just behind (against the outward normal) a triangle
+	/// given in sub-voxel coordinates, where the texture (if any) is opaque.
+	/// Closed meshes become their solid shape's shell.
+	static void rasterizeTriangle(v3f a, v3f b, v3f c, v3f normal,
+			std::unordered_map<v3s16, u64> &voxels,
+			const AlphaMask *mask = nullptr, v2f ta = {}, v2f tb = {}, v2f tc = {});
 
 private:
 	struct Light {
@@ -106,6 +172,9 @@ private:
 		v3s16 blockpos;
 		bool valid = false;
 		std::vector<Light> lights;
+		// Voxel entity shadows: the map's own masks, MAP_BLOCKSIZE^3,
+		// x fastest then z then y
+		std::vector<u64> map_masks;
 	};
 
 	PointLightShadows(Client *client, video::IVideoDriver *driver);
@@ -125,6 +194,19 @@ private:
 
 	void fillSlot(Slot &slot, v3s16 blockpos, v3s16 slot_index);
 	void rebuildLightLists();
+
+	// Entity shadows (pointshadowentities.cpp)
+	void setEntityMode(EntityMode mode);
+	void updateEntities(v3f camera_pos);
+	void collectEntityNodes(v3f camera_pos, std::vector<scene::ISceneNode *> &nodes);
+	bool reachesLight(const aabb3f &scene_box) const;
+	void updateEntityBoxes(const std::vector<scene::ISceneNode *> &nodes);
+	void updateEntityVoxels(const std::vector<scene::ISceneNode *> &nodes);
+	void clearEntityVoxels();
+	void uploadVoxelNodes(const std::vector<v3s16> &nodes);
+	void updateEntityShadowMaps(const std::vector<scene::ISceneNode *> &nodes);
+	void createEntityMapTexture();
+	bool initEntityMaps();
 	void readSettings();
 	static void settingChangedCallback(const std::string &name, void *data);
 
@@ -150,4 +232,32 @@ private:
 	std::unordered_map<u32, u64> m_box_masks;
 
 	std::vector<u32> m_upload_buffer;
+
+	// Entity shadows
+	IWritableShaderSource *m_shsrc = nullptr;
+	EntityMode m_entity_mode = EntityMode::None;
+	// Per light list cell: whether any light reaches it
+	std::vector<bool> m_cell_lit;
+	// Boxes
+	std::vector<f32> m_box_rows;
+	u32 m_box_count = 0;
+	// Voxels: entity sub-voxels per node (absolute node position)
+	std::unordered_map<v3s16, u64> m_entity_voxels;
+	// Alpha of entity textures, read back once
+	std::unordered_map<video::ITexture *, AlphaMask> m_alpha_masks;
+	const AlphaMask *getAlphaMask(video::ITexture *texture);
+	// Boxes of the opaque parts of meshes, per mesh and textures: (joint,
+	// box in joint space), joint -1 - i for unskinned buffer i
+	std::unordered_map<std::string, std::vector<std::pair<s32, aabb3f>>> m_part_boxes;
+	const std::vector<std::pair<s32, aabb3f>> &getPartBoxes(scene::ISceneNode *node,
+			scene::IMesh *mesh);
+	// Shadow maps
+	video::ITexture *m_entity_map = nullptr;
+	s32 m_entity_map_material = -1;
+	bool m_entity_maps_failed = false;
+	bool m_entity_map_clear = true;
+	std::array<f32, 4 * MAP_LIGHTS> m_map_lights {};
+	std::array<f32, 16 * 6> m_map_faces {};
+	std::array<core::matrix4, 6> m_face_views;
+	core::matrix4 m_face_projection;
 };

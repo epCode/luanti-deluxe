@@ -10,6 +10,7 @@
 #include "client.h"
 #include "collision.h"
 #include "client/content_cao.h"
+#include "client/camera.h"
 #include "client/clientevent.h"
 #include "client/renderingengine.h"
 #include "client/texturesource.h"
@@ -194,14 +195,15 @@ video::SColor Particle::updateLight(ClientEnvironment *env)
 	const LightmapState &lightmap = env->getGameDef()->getLightmapState();
 	if (lightmap.isEnabled()) {
 		// Particle.getLightCoords: light of the containing node, plus glow
-		u8 block = 0, sky = LIGHT_SUN;
+		u8 block = 0, sky = LIGHT_SUN_LEVEL;
 		if (pos_ok && n.getContent() != CONTENT_IGNORE) {
 			ContentLightingFlags f = env->getGameDef()->ndef()->getLightingFlags(n);
 			block = n.getBlockLight(f);
 			sky = n.getSkyLight(f);
 		}
+		// Glow doesn't make extended light levels (above 15)
 		if (m_p.glow > 0)
-			block = std::min<int>(LIGHT_SUN, block + m_p.glow);
+			block = std::max<int>(block, std::min<int>(LIGHT_SUN_LEVEL, block + m_p.glow));
 		video::SColorf c = lightmap.sample(block, sky);
 		return video::SColor(255,
 			core::round32(c.r * m_base_color.getRed()),
@@ -213,9 +215,9 @@ video::SColor Particle::updateLight(ClientEnvironment *env)
 		light = n.getLightBlend(env->getDayNightRatio(),
 				env->getGameDef()->ndef()->getLightingFlags(n));
 	else
-		light = blend_light(env->getDayNightRatio(), LIGHT_SUN, 0);
+		light = blend_light(env->getDayNightRatio(), LIGHT_SUN_LEVEL, 0);
 
-	u8 m_light = decode_light(light + m_p.glow);
+	u8 m_light = decode_light(std::min<int>(light + m_p.glow, LIGHT_LIMIT));
 	return video::SColor(255,
 		m_light * m_base_color.getRed() / 255,
 		m_light * m_base_color.getGreen() / 255,
@@ -259,6 +261,44 @@ void Particle::updateVertices(ClientEnvironment *env, video::SColor color)
 	auto half = m_p.size * .5f,
 	     hx   = half * scale.X,
 	     hy   = half * scale.Y;
+
+	// Update position -- see #10398
+	auto *player = env->getLocalPlayer();
+	v3s16 camera_offset = env->getCameraOffset();
+
+	if (m_p.rotated) {
+		/* Fixed world orientation: like an upright_sprite object with
+		 * set_rotation(rotation). The quad lies in the local XY plane, its
+		 * front faces local +Z and texture "up" is local +Y. */
+		core::matrix4 rot_m;
+		const v3f rot = m_p.rotation.blend(m_time / (m_expiration + 0.1f));
+		// Same as GenericCAO: angles are inverted -> right-handed rotation
+		setPitchYawRollRad(rot_m, -rot);
+
+		/* Viewed from the back, mirror the texture coordinates so that the
+		 * texture reads the same from both sides (as with upright_sprite
+		 * and Minecraft's double-sided rotated quads). */
+		v3f world_pos = m_pos * BS;
+		Camera *camera = env->getGameDef()->getCamera();
+		v3f eye = camera ? camera->getPosition() : player->getEyePosition();
+		v3f normal = rot_m.rotateAndScaleVect(v3f(0, 0, 1));
+		bool back = normal.dotProduct(eye - world_pos) < 0.0f;
+		f32 ul = back ? tx0 : tx1, // texture u at local -X
+		    ur = back ? tx1 : tx0; // texture u at local +X
+
+		vertices[0] = video::S3DVertex(-hx, -hy, 0, 0, 0, 0, color, ul, ty1);
+		vertices[1] = video::S3DVertex( hx, -hy, 0, 0, 0, 0, color, ur, ty1);
+		vertices[2] = video::S3DVertex( hx,  hy, 0, 0, 0, 0, color, ur, ty0);
+		vertices[3] = video::S3DVertex(-hx,  hy, 0, 0, 0, 0, color, ul, ty0);
+
+		const v3f origin = world_pos - intToFloat(camera_offset, BS);
+		for (u16 i = 0; i < 4; i++) {
+			video::S3DVertex &vertex = vertices[i];
+			vertex.Pos = rot_m.rotateAndScaleVect(vertex.Pos) + origin;
+		}
+		return;
+	}
+
 	vertices[0] = video::S3DVertex(-hx, -hy,
 		0, 0, 0, 0, color, tx0, ty1);
 	vertices[1] = video::S3DVertex(hx, -hy,
@@ -267,10 +307,6 @@ void Particle::updateVertices(ClientEnvironment *env, video::SColor color)
 		0, 0, 0, 0, color, tx1, ty0);
 	vertices[3] = video::S3DVertex(-hx, hy,
 		0, 0, 0, 0, color, tx0, ty0);
-
-	// Update position -- see #10398
-	auto *player = env->getLocalPlayer();
-	v3s16 camera_offset = env->getCameraOffset();
 
 	for (u16 i = 0; i < 4; i++) {
 		video::S3DVertex &vertex = vertices[i];

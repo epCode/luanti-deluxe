@@ -239,9 +239,15 @@ int LuaVoxelManip::l_set_lighting(lua_State *L)
 
 	luaL_checktype(L, 2, LUA_TTABLE);
 
-	u8 light;
-	light  = (getintfield_default(L, 2, "day",   0) & 0x0F);
-	light |= (getintfield_default(L, 2, "night", 0) & 0x0F) << 4;
+	// A day value of 15 (LIGHT_SUN_LEVEL) is direct sunlight
+	auto read_bank = [L] (const char *name) -> u8 {
+		int v = rangelim(getintfield_default(L, 2, name, 0), 0, LIGHT_LIMIT);
+		return v;
+	};
+	u8 day = read_bank("day");
+	if (day == LIGHT_SUN_LEVEL)
+		day = LIGHT_SUN;
+	u16 light = pack_light(day, read_bank("night"));
 
 	MMVManip *vm = o->vm;
 
@@ -295,7 +301,7 @@ int LuaVoxelManip::l_set_light_data(lua_State *L)
 	u32 volume = vm->m_area.getVolume();
 	for (u32 i = 0; i != volume; i++) {
 		lua_rawgeti(L, 2, i + 1);
-		u8 light = lua_tointeger(L, -1);
+		u16 light = lua_tointeger(L, -1);
 
 		vm->m_data[i].param1 = light;
 

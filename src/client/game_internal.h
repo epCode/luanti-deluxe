@@ -196,6 +196,10 @@ protected:
 	void updatePlayerControl(const CameraOrientation &cam);
 	void updatePauseState();
 	void step(f32 dtime);
+	// Object properties turn_attached_players and attached_player_yaw_limit
+	void updateAttachedView(CameraOrientation *cam, CameraOrientation *cam_target);
+	u16 m_view_vehicle_id = 0;
+	f32 m_view_vehicle_yaw = 0.0f;
 	void processClientEvents(CameraOrientation *cam);
 	void updateCameraMode(); // call after changing it
 	void updateCameraOffset();

@@ -399,15 +399,31 @@ static void convertLightBanks(MapNode *nodes, u32 count,
 		MapNode &n = nodes[i];
 		if (!ndef->getLightingFlags(n).has_light)
 			continue;
-		u8 day = n.param1 & 0x0F;
-		u8 night = n.param1 >> 4;
+		u8 day = unpack_light_day(n.param1);
+		u8 night = unpack_light_night(n.param1);
 		if (to_separate) {
 			if (day <= night)
 				day = 0;
 		} else {
 			day = std::max(day, night);
 		}
-		n.param1 = (night << 4) | day;
+		n.param1 = pack_light(day, night);
+	}
+}
+
+/*
+	Converts light data from or to the 4-bit light format used before
+	serialization version 30 (see legacy_pack_light() in light.h).
+*/
+static void convertLegacyLight(MapNode *nodes, u32 count,
+	const NodeDefManager *ndef, bool to_legacy)
+{
+	for (u32 i = 0; i < count; i++) {
+		MapNode &n = nodes[i];
+		if (!ndef->getLightingFlags(n).has_light)
+			continue;
+		n.param1 = to_legacy ? legacy_pack_light(n.param1) :
+			legacy_unpack_light(n.param1 & 0xFF);
 	}
 }
 
@@ -446,12 +462,14 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 	NameIdMapping nimap;
 	Buffer<u8> buf;
 	const u8 content_width = 2;
-	const u8 params_width = 2;
+	const u8 params_width = MapNode::bulkParamsWidth(version);
+	const size_t size = m_is_mono_block ? 1 : nodecount;
 	if(disk)
 	{
-		const size_t size = m_is_mono_block ? 1 : nodecount;
 		std::unique_ptr<MapNode[]> tmp_nodes(new MapNode[size]);
 		std::copy_n(data, size, tmp_nodes.get());
+		if (version < 30)
+			convertLegacyLight(tmp_nodes.get(), size, m_gamedef->ndef(), true);
 		getBlockNodeIdMapping(&nimap, tmp_nodes.get(), size, m_gamedef->ndef());
 
 		buf = MapNode::serializeBulk(version, tmp_nodes.get(), nodecount,
@@ -463,6 +481,14 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 
 			nimap.serialize(os);
 		}
+	}
+	else if (version < 30)
+	{
+		std::unique_ptr<MapNode[]> tmp_nodes(new MapNode[size]);
+		std::copy_n(data, size, tmp_nodes.get());
+		convertLegacyLight(tmp_nodes.get(), size, m_gamedef->ndef(), true);
+		buf = MapNode::serializeBulk(version, tmp_nodes.get(), nodecount,
+				content_width, params_width, m_is_mono_block);
 	}
 	else
 	{
@@ -581,7 +607,7 @@ void MapBlock::deSerialize(std::istream &in_compressed, u8 version, bool disk)
 	u8 params_width = readU8(is);
 	if(content_width != 1 && content_width != 2)
 		throw SerializationError("MapBlock::deSerialize(): invalid content_width");
-	if(params_width != 2)
+	if(params_width != MapNode::bulkParamsWidth(version))
 		throw SerializationError("MapBlock::deSerialize(): invalid params_width");
 
 	/*
@@ -659,6 +685,9 @@ void MapBlock::deSerialize(std::istream &in_compressed, u8 version, bool disk)
 		// Dynamically re-set ids based on node names
 		correctBlockNodeIds(&nimap, data, m_gamedef);
 
+		if (version < 30)
+			convertLegacyLight(data, nodecount, m_gamedef->ndef(), false);
+
 		// Blocks saved with the other light bank layout are converted
 		if (((flags & 0x10) != 0) != g_separate_sky_light)
 			convertLightBanks(data, nodecount, m_gamedef->ndef(),
@@ -677,6 +706,8 @@ void MapBlock::deSerialize(std::istream &in_compressed, u8 version, bool disk)
 			m_is_air = nimap.getId("air", dummy);
 			m_is_air_expired = false;
 		}
+	} else if (version < 30) {
+		convertLegacyLight(data, nodecount, m_gamedef->ndef(), false);
 	}
 
 	TRACESTREAM(<<"MapBlock::deSerialize "<<getPos()
@@ -918,6 +949,8 @@ void MapBlock::deSerialize_pre22(std::istream &is, u8 version, bool disk)
 			data[i].setParam2(dir_new_format);
 		}
 	}
+
+	convertLegacyLight(data, nodecount, nodedef, false);
 }
 
 /*

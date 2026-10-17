@@ -130,6 +130,9 @@ private:
 
 	// swing_arm(self)
 	static int l_swing_arm(lua_State *L);
+
+	// entity_event(self, id)
+	static int l_entity_event(lua_State *L);
 	// get_animation(self)
 	static int l_get_animation(lua_State *L);
 

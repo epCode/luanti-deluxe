@@ -178,6 +178,8 @@ public:
 	// Schedules a tick for the liquid content c at p (no-op if one is pending)
 	void scheduleMinecraftLiquidTick(v3s16 p, content_t c, u16 delay);
 	size_t getMinecraftLiquidTickCount() const { return m_liquid_tick_keys.size(); }
+	// A Minecraft-model liquid node or a node waterlogged with one
+	bool isMinecraftLiquidNode(MapNode n) const;
 
 	MapSettingsManager settings_mgr;
 

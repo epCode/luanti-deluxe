@@ -117,6 +117,19 @@ uniform float pointShadowStrength;
 #define PS_CELLS (POINT_SHADOW_SIZE / POINT_SHADOW_CELL)
 #define PS_TEX_WIDTH (2 * POINT_SHADOW_SIZE)
 
+// How entities cast shadows (point_light_entity_shadows): 0 = not at all,
+// 1 = boxes, 2 = voxels (written into the volume), 3 = shadow maps
+uniform float pointShadowEntityMode;
+// Boxes: rows of the matrices taking volume coordinates to [-1, 1]^3
+uniform vec4 pointShadowBoxes[3 * POINT_SHADOW_MAX_BOXES];
+uniform float pointShadowBoxCount;
+// Shadow maps: light source nodes (volume coordinates, w = 1 for used
+// entries, which come first) and the projections of the cube faces
+uniform vec4 pointShadowMapLights[POINT_SHADOW_MAP_LIGHTS];
+uniform mat4 pointShadowMapFaces[6];
+#define pointShadowEntityMap texture4
+uniform highp sampler2D pointShadowEntityMap;
+
 // RGBA8 texel (stored as A8R8G8B8) back to its 32 bits
 uint psDecode(vec4 t)
 {
@@ -185,8 +198,8 @@ float psTrace(vec3 p, ivec3 light)
 	vec3 t_delta = 1.0 / max(abs(d), vec3(1e-6));
 	vec3 t_max = mix(p - vec3(c), vec3(c) + 1.0 - p, step(0.0, d)) * t_delta;
 	float t0 = 0.0;
-	// A light reaches 15 nodes (Manhattan distance) at most
-	for (int i = 0; i < 24; i++) {
+	// A light reaches 59 nodes (Manhattan distance) at most
+	for (int i = 0; i < 64; i++) {
 		if (c == light)
 			return 1.0;
 		if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(PS_SIZE))))
@@ -214,6 +227,67 @@ float psTrace(vec3 p, ivec3 light)
 			t_max.z += t_delta.z;
 		}
 		t0 = t1;
+	}
+	return 1.0;
+}
+
+// Whether an entity box blocks the way from a to b (volume coordinates).
+// Only boxes the way enters count: a point on an entity isn't shadowed by
+// the box it lies in.
+bool psBoxesBlock(vec3 a, vec3 b)
+{
+	int count = int(pointShadowBoxCount);
+	for (int i = 0; i < POINT_SHADOW_MAX_BOXES; i++) {
+		if (i >= count)
+			break;
+		vec4 r0 = pointShadowBoxes[3 * i];
+		vec4 r1 = pointShadowBoxes[3 * i + 1];
+		vec4 r2 = pointShadowBoxes[3 * i + 2];
+		vec3 ua = vec3(dot(r0, vec4(a, 1.0)), dot(r1, vec4(a, 1.0)), dot(r2, vec4(a, 1.0)));
+		vec3 ub = vec3(dot(r0, vec4(b, 1.0)), dot(r1, vec4(b, 1.0)), dot(r2, vec4(b, 1.0)));
+		vec3 d = ub - ua;
+		d = mix(d, vec3(1e-6), lessThan(abs(d), vec3(1e-6)));
+		vec3 t0 = (-1.0 - ua) / d;
+		vec3 t1 = (1.0 - ua) / d;
+		vec3 tmin = min(t0, t1);
+		vec3 tmax = max(t0, t1);
+		float enter = max(max(tmin.x, tmin.y), tmin.z);
+		float exit = min(min(tmax.x, tmax.y), tmax.z);
+		if (enter > 0.0 && enter < exit && enter < 1.0)
+			return true;
+	}
+	return false;
+}
+
+// 1 if no entity in the shadow map of the light source node blocks the way
+// from p (volume coordinates), else 0. Lights without a map give 1.
+float psEntityMap(vec3 p, ivec3 light)
+{
+	for (int s = 0; s < POINT_SHADOW_MAP_LIGHTS; s++) {
+		vec4 l = pointShadowMapLights[s];
+		if (l.w == 0.0)
+			break;
+		if (ivec3(l.xyz) != light)
+			continue;
+		// Scene units, from the center of the light source node
+		vec3 d = (p - vec3(light) - 0.5) * 10.0;
+		vec3 ad = abs(d);
+		int f;
+		if (ad.x >= ad.y && ad.x >= ad.z)
+			f = d.x > 0.0 ? 0 : 1;
+		else if (ad.y >= ad.z)
+			f = d.y > 0.0 ? 2 : 3;
+		else
+			f = d.z > 0.0 ? 4 : 5;
+		vec4 clip = pointShadowMapFaces[f] * vec4(d, 1.0);
+		vec2 uv = clamp(clip.xy / clip.w * 0.5 + 0.5, 0.0, 1.0);
+		// Faces side by side, lights from the top down (render targets are
+		// upside down in texture coordinates)
+		vec2 tc = vec2((float(f) + uv.x) / 6.0,
+				1.0 - (float(s) + 1.0 - uv.y) / float(POINT_SHADOW_MAP_LIGHTS));
+		float stored = texture2D(pointShadowEntityMap, tc).r;
+		float dist = (length(d) - 0.6) / POINT_SHADOW_MAP_FAR;
+		return dist > stored ? 0.0 : 1.0;
 	}
 	return 1.0;
 }
@@ -261,8 +335,21 @@ float getPointShadow(vec3 pos, vec3 normal)
 		float facing = 1.0;
 		if (n != vec3(0.0))
 			facing = clamp(dot(n, d) * inversesqrt(dist2) * 3.0 + 0.5, 0.0, 1.0);
-		if (facing > 0.0)
-			lit += w * facing * psTrace(p, light);
+		if (facing > 0.0) {
+			vec3 start = p;
+#ifdef POINT_SHADOW_OBJECT_RECEIVER
+			// Leave the entity's own voxels first
+			if (pointShadowEntityMode == 2.0)
+				start += d * min(0.35 * inversesqrt(dist2), 0.5);
+#endif
+			float vis = psTrace(start, light);
+			if (vis > 0.0 && pointShadowEntityMode == 1.0 &&
+					psBoxesBlock(p, vec3(light) + 0.5))
+				vis = 0.0;
+			if (vis > 0.0 && pointShadowEntityMode == 3.0)
+				vis = psEntityMap(p, light);
+			lit += w * facing * vis;
+		}
 	}
 	return total > 0.0 ? mix(1.0, lit / total, fade) : 1.0;
 }

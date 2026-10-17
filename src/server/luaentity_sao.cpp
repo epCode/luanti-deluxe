@@ -220,8 +220,16 @@ void LuaEntitySAO::step(float dtime, bool send_recommended)
 	if (!send_recommended)
 		return;
 
-	if(!isAttached())
-	{
+	if (!isAttached() && m_prop.transform_interpolation) {
+		// Clients interpolate between updates: send every change, so that a
+		// missing update means "nothing changed".
+		float move_d = getBasePosition().getDistanceFrom(m_last_sent_position);
+		float vel_d = m_velocity.getDistanceFrom(m_last_sent_velocity);
+		v3f rot_d = m_rotation - m_last_sent_rotation;
+		if (move_d > 0.0001f * BS || vel_d > 0.0001f * BS ||
+				rot_d.getLengthSQ() > 0.0001f * 0.0001f)
+			sendPosition(true, false);
+	} else if (!isAttached()) {
 		// TODO: force send when acceleration changes enough?
 		float minchange = 0.2*BS;
 		if(m_last_sent_position_timer > 1.0){
@@ -240,6 +248,7 @@ void LuaEntitySAO::step(float dtime, bool send_recommended)
 			sendPosition(true, false);
 		}
 	}
+	m_last_send_opportunity_ms = getServerTimeMs();
 
 	sendOutdatedData();
 }
@@ -552,7 +561,9 @@ void LuaEntitySAO::sendPosition(bool do_interpolate, bool is_movement_end)
 		m_rotation,
 		do_interpolate,
 		is_movement_end,
-		update_interval
+		update_interval,
+		getServerTimeMs(),
+		m_last_send_opportunity_ms
 	);
 	// create message and add to list
 	m_messages_out.emplace(getId(), false, str);

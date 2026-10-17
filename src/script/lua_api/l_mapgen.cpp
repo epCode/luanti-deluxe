@@ -2017,7 +2017,7 @@ int ModApiMapgen::calc_lighting(lua_State *L, MMVManip *vm,
 }
 
 int ModApiMapgen::set_lighting(lua_State *L, MMVManip *vm,
-		v3s16 pmin, v3s16 pmax, u8 light)
+		v3s16 pmin, v3s16 pmax, u16 light)
 {
 	assert(vm->m_area.contains(VoxelArea(pmin, pmax)));
 

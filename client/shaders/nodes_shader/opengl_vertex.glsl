@@ -226,10 +226,12 @@ void main(void)
 		// Lightmap lighting: the color holds tint * ambient occlusion * shade,
 		// the light levels come separately (terrain.vsh)
 		vec2 light = lightmapVertexLight();
-		vec3 light_color = lightmapSample(light);
+		// Block light above level 15 makes it brighter
+		float overbright = lightmapOverbright(light.x);
+		vec3 light_color = lightmapSample(light) * overbright;
 #if defined(ENABLE_DYNAMIC_SHADOWS) || defined(ENABLE_POINT_SHADOWS)
 		// What the sky and the block light add, for shadows to take away
-		varSkyLight = color.rgb * (light_color - lightmapSample(vec2(light.x, 0.0)));
+		varSkyLight = color.rgb * (light_color - lightmapSample(vec2(light.x, 0.0)) * overbright);
 		varBlockLight = color.rgb * (light_color - lightmapSample(vec2(0.0, light.y)));
 #endif
 		color.rgb *= light_color;
@@ -246,6 +248,9 @@ void main(void)
 	// colors with the color of the incoming light.
 	// The pre-baked colors are halved to prevent overflow.
 	// The alpha gives the ratio of sunlight in the incoming light.
+	// Light brighter than the classic maximum (extended light levels)
+	// may go up to twice the usual brightness.
+	vec3 max_color = max(vec3(1.0), color.rgb * 2.0);
 	nightRatio = 1.0 - color.a;
 	color.rgb = color.rgb * (color.a * dayLight.rgb +
 		nightRatio * artificialLight.rgb) * 2.0;
@@ -257,7 +262,7 @@ void main(void)
 	color.b += max(0.0, 0.021 - abs(0.2 * brightness - 0.021) +
 		0.07 * brightness);
 
-	varColor = clamp(color, 0.0, 1.0);
+	varColor = vec4(clamp(color.rgb, vec3(0.0), max_color), clamp(color.a, 0.0, 1.0));
 	}
 
 #ifdef ENABLE_DYNAMIC_SHADOWS

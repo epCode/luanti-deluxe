@@ -89,6 +89,16 @@ struct ObjectProperties
 	f32 nametag_range = 0.0f;
 	// Procedural model animation done by the client ("" = none)
 	std::string procedural_animation;
+	// Client interpolates position, rotation, scale and attachment offsets
+	// between server updates (see client/transform_interpolation.h)
+	bool transform_interpolation = false;
+	// Local players attached to this object turn their view with it
+	bool turn_attached_players = false;
+	// Max. yaw (degrees) between attached players' view and this object (0 = none)
+	f32 attached_player_yaw_limit = 0.0f;
+	// Liquids are not drawn inside this box (object space, rotates with the
+	// object), like the water inside a Minecraft boat. Empty = none.
+	aabb3f liquid_mask_box = aabb3f(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
 
 	ObjectProperties();
 

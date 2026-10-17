@@ -78,6 +78,7 @@ void set_default_settings()
 	settings->setDefault("language", "");
 	settings->setDefault("name", "");
 	settings->setDefault("bind_address", "");
+	settings->setDefault("default_game", "mineclonia");
 	settings->setDefault("serverlist_url", "https://servers.luanti.org");
 
 	// Client
@@ -360,6 +361,7 @@ void set_default_settings()
 	settings->setDefault("shadow_pixelated", "true");
 	settings->setDefault("enable_point_light_shadows", "true");
 	settings->setDefault("point_light_shadow_strength", "0.75");
+	settings->setDefault("point_light_entity_shadows", "boxes");
 #ifndef __ANDROID__
 	// equivalent to "Medium" preset
 	// see "shadows_component.lua"

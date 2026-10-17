@@ -270,6 +270,11 @@ struct CommonParticleParams
 	u8 glow = 0;
 	MapNode node;
 	u8 node_tile = 0;
+	/* Fixed world-space orientation instead of facing the camera.
+	 * Euler angles in radians, same convention as ObjectRef:set_rotation.
+	 * Tweened over the lifetime of each particle. */
+	bool rotated = false;
+	ParticleParamTypes::v3fTween rotation;
 
 	CommonParticleParams() {
 		animation.type = TAT_NONE;
@@ -288,7 +293,14 @@ struct CommonParticleParams
 		to.glow = glow;
 		to.node = node;
 		to.node_tile = node_tile;
+		to.rotated = rotated;
+		to.rotation = rotation;
 	}
+
+	/* Fields appended at the end of both the particle and the particle
+	 * spawner packets. Older clients do not read them. */
+	void serializeAppendedFields(std::ostream &os) const;
+	void deSerializeAppendedFields(std::istream &is);
 };
 
 struct ParticleParameters : CommonParticleParams

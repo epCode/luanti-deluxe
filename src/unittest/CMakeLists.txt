@@ -48,15 +48,18 @@ set(unittest_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/test_voxelalgorithms.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_voxelmanipulator.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_gettext.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/test_waterlogging.cpp
 	PARENT_SCOPE)
 
 set(unittest_client_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/mesh_compare.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_clientactiveobjectmgr.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/test_transform_interpolation.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_content_mapblock.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_lightmap.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_pointlightshadows.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_minecraft_animator.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/test_minecraft_warden_animator.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_eventmanager.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_gameui.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_keycode.cpp

@@ -70,7 +70,7 @@ ServerScripting::ServerScripting(Server* server):
 	lua_newtable(L);
 	lua_setfield(L, -2, "luaentities");
 
-	// Brightest light a node may emit, depends on the light bank layout
+	// Brightest light a node may emit
 	lua_pushinteger(L, max_light_source());
 	lua_setfield(L, -2, "LIGHT_SOURCE_MAX");
 

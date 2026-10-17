@@ -33,6 +33,12 @@ local gravity = tonumber(core.settings:get("movement_gravity")) or 9.81
 -- Falling stuff
 --
 
+-- The liquid source in a node, if it holds a source
+local function source_liquid(node)
+	local liquid, is_source = core.get_node_liquid(node)
+	return is_source and liquid or nil
+end
+
 core.register_entity(":__builtin:falling_node", {
 	initial_properties = {
 		visual = "node",
@@ -184,6 +190,8 @@ core.register_entity(":__builtin:falling_node", {
 		-- Decide if we're replacing the node or placing on top
 		-- This condition is very similar to the check in core.check_single_for_falling(p)
 		local np = vector.copy(bcp)
+		-- FallingBlockEntity: landing in a liquid source waterlogs the node
+		local landed_liquid
 		if bcd and bcd.buildable_to
 				and -- Take "float" group into consideration:
 				(
@@ -193,6 +201,7 @@ core.register_entity(":__builtin:falling_node", {
 					(self.floats and self.liquidtype ~= "none" and bcd.liquidtype ~= "source")
 				) then
 
+			landed_liquid = source_liquid(bcn)
 			core.remove_node(bcp)
 		else
 			-- We are placing on top so check what's there
@@ -201,6 +210,7 @@ core.register_entity(":__builtin:falling_node", {
 			local n2 = core.get_node(np)
 			local nd = core.registered_nodes[n2.name]
 			if not nd or nd.buildable_to then
+				landed_liquid = source_liquid(n2)
 				core.remove_node(np)
 			else
 				-- 'walkable' is used to mean "falling nodes can't replace this"
@@ -221,6 +231,10 @@ core.register_entity(":__builtin:falling_node", {
 		-- Create node
 		local def = core.registered_nodes[self.node.name]
 		if def then
+			if landed_liquid then
+				self.node.name = core.get_waterlogged_node(self.node.name,
+					landed_liquid) or self.node.name
+			end
 			core.add_node(np, self.node)
 			if self.meta then
 				core.get_meta(np):from_table(self.meta)
@@ -345,8 +359,14 @@ local function convert_to_falling_node(pos, node)
 		core.sound_play(def.sounds.fall, {pos = pos}, true)
 	end
 
+	-- The falling node leaves its liquid behind
+	local ndef = core.registered_nodes[node.name]
+	if ndef and (ndef.waterlogged_liquid or "") ~= "" and
+			core.registered_nodes[ndef.waterlogged_alternative or ""] then
+		node.name = ndef.waterlogged_alternative
+	end
 	obj:get_luaentity():set_node(node, metatable)
-	core.remove_node(pos)
+	core.remove_node_keep_liquid(pos)
 	return true, obj
 end
 
@@ -377,7 +397,7 @@ local function drop_attached_node(p)
 	if def and def.sounds and def.sounds.fall then
 		core.sound_play(def.sounds.fall, {pos = p}, true)
 	end
-	core.remove_node(p)
+	core.remove_node_keep_liquid(p)
 	for _, item in pairs(drops) do
 		local pos = {
 			x = p.x + math.random()/2 - 0.25,

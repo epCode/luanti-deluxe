@@ -193,7 +193,8 @@ public:
 	 * @param nmin Area to operate on
 	 * @param nmax ^
 	 */
-	void setLighting(u8 light, v3s16 nmin, v3s16 nmax);
+	// light: param1 with both light banks, see pack_light()
+	void setLighting(u16 light, v3s16 nmin, v3s16 nmax);
 	/**
 	 * Run all lighting calculations.
 	 * @param nmin Area to spread sunlight in
@@ -250,8 +251,8 @@ private:
 	 * @param light Light value (contains both banks)
 	 *
 	 */
-	void lightSpread(VoxelArea &a, std::queue<std::pair<v3s16, u8>> &queue,
-		const v3s16 &p, u8 light);
+	void lightSpread(VoxelArea &a, std::queue<std::pair<v3s16, u16>> &queue,
+		const v3s16 &p, u16 light);
 
 	// isLiquidHorizontallyFlowable() is a helper function for updateLiquid()
 	// that checks whether there are floodable nodes without liquid beneath

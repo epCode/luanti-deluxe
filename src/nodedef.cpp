@@ -373,6 +373,10 @@ void ContentFeatures::reset()
 	liquid_flow = LiquidFlowParams();
 	liquid_flow_zones.clear();
 	drowning = 0;
+	waterlogged_liquid.clear();
+	waterlogged_liquid_id = CONTENT_IGNORE;
+	waterlogged_alternative.clear();
+	waterlogged_alternative_id = CONTENT_IGNORE;
 	light_source = 0;
 	damage_per_second = 0;
 	node_box.reset();
@@ -520,6 +524,8 @@ void ContentFeatures::serialize(std::ostream &os, u16 protocol_version) const
 	writeU8(os, move_resistance);
 	writeU8(os, liquid_move_physics);
 	writeU8(os, post_effect_color_shaded);
+	os << serializeString16(waterlogged_liquid);
+	os << serializeString16(waterlogged_alternative);
 }
 
 void ContentFeatures::deSerialize(std::istream &is, u16 protocol_version)
@@ -652,6 +658,13 @@ void ContentFeatures::deSerialize(std::istream &is, u16 protocol_version)
 		// >= 5.8.0-dev
 
 		post_effect_color_shaded = readU8(is);
+
+		if (!canRead(is))
+			break;
+		// Luanti Deluxe: waterlogging
+
+		waterlogged_liquid = deSerializeString16(is);
+		waterlogged_alternative = deSerializeString16(is);
 
 		//if (!canRead(is))
 		//	break;
@@ -1257,6 +1270,10 @@ void NodeDefManager::resetNodeResolveState()
 void NodeDefManager::resolveCrossrefs()
 {
 	for (ContentFeatures &f : m_content_features) {
+		f.waterlogged_liquid_id = f.waterlogged_liquid.empty() ?
+				CONTENT_IGNORE : getId(f.waterlogged_liquid);
+		f.waterlogged_alternative_id = f.waterlogged_alternative.empty() ?
+				CONTENT_IGNORE : getId(f.waterlogged_alternative);
 		if (f.isLiquid() || f.isLiquidRender()) {
 			f.liquid_alternative_flowing_id = getId(f.liquid_alternative_flowing);
 			f.liquid_alternative_source_id = getId(f.liquid_alternative_source);

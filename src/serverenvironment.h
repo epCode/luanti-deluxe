@@ -131,6 +131,9 @@ public:
 	float getSendRecommendedInterval()
 	{ return m_recommended_send_interval; }
 
+	// Accumulated step time in seconds, used to timestamp object updates
+	f64 getSimTime() const { return m_sim_time; }
+
 	GUIDGenerator & getGUIDGenerator()
 	{ return m_guid_generator; }
 
@@ -403,6 +406,7 @@ private:
 	LBMManager m_lbm_mgr;
 	// An interval for generally sending object positions and stuff
 	float m_recommended_send_interval = 0.1f;
+	f64 m_sim_time = 0.0;
 	// Estimate for general maximum lag as determined by server.
 	// Can raise to high values like 15s with eg. map generation mods.
 	float m_max_lag_estimate = 0.1f;

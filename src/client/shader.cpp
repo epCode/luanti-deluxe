@@ -81,6 +81,19 @@ vec3 lightmapSample(vec2 light)
 		f.y);
 }
 
+// Brightness factor of block light levels above 15 (extended light levels):
+// rises with diminishing steps to twice the brightness of level 14 at
+// level 60, like light_overbright_shape() in light.cpp
+float lightmapOverbright(float block)
+{
+	if (block <= 15.0)
+		return 1.0;
+	const float k = 0.05;
+	float shape = (1.0 - exp(-k * (min(block, 60.0) - 15.0))) / (1.0 - exp(-k * 45.0));
+	float max_factor = 2.0 * lightmapCurve(14.0 / 15.0);
+	return 1.0 + (max_factor - 1.0) * shape;
+}
+
 // Block and sky light levels of a map vertex (S3DVertex::Light)
 vec2 lightmapVertexLight()
 {
@@ -90,7 +103,11 @@ vec2 lightmapVertexLight()
 	float sky = floor(light_bits / 16.0);
 	return vec2(light_bits - sky * 16.0, sky);
 #else
-	return inVertexLight * (255.0 / 16.0);
+	// 1/16 levels up to level 15; block light above that in steps of
+	// 3 levels, see lightmap_set_vertex()
+	vec2 light = inVertexLight * 255.0;
+	float block = light.x <= 240.0 ? light.x / 16.0 : 15.0 + (light.x - 240.0) * 3.0;
+	return vec2(block, light.y / 16.0);
 #endif
 }
 )";
@@ -360,6 +377,7 @@ class MainShaderUniformSetter : public IShaderUniformSetter
 	CachedPixelShaderSetting<SamplerLayer_t> m_texture1{"texture1"};
 	CachedPixelShaderSetting<SamplerLayer_t> m_texture2{"texture2"};
 	CachedPixelShaderSetting<SamplerLayer_t> m_texture3{"texture3"};
+	CachedPixelShaderSetting<SamplerLayer_t> m_texture4{"texture4"};
 
 	// common material variables passed to shader
 	video::SColor m_material_color;
@@ -407,6 +425,8 @@ public:
 		m_texture2.set(&tex_id, services);
 		tex_id = 3;
 		m_texture3.set(&tex_id, services);
+		tex_id = 4;
+		m_texture4.set(&tex_id, services);
 
 		video::SColorf colorf(m_material_color);
 		m_material_color_setting.set(colorf, services);

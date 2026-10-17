@@ -1134,6 +1134,11 @@ void Client::handleCommand_AddParticleSpawner(NetworkPacket* pkt)
 			p.texpool.push_back(newtex);
 		}
 
+		if (!canRead(is))
+			break;
+		// >= Luanti Deluxe (fixed particle rotation)
+		p.deSerializeAppendedFields(is);
+
 		//if (!canRead(is))
 		//	break;
 		// Add new code here

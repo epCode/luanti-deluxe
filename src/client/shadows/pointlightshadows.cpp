@@ -41,6 +41,9 @@ public:
 		constants["POINT_SHADOW_SIZE"] = (int)PointLightShadows::SIZE;
 		constants["POINT_SHADOW_CELL"] = (int)PointLightShadows::CELL;
 		constants["POINT_SHADOW_CELL_LIGHTS"] = (int)PointLightShadows::CELL_LIGHTS;
+		constants["POINT_SHADOW_MAX_BOXES"] = (int)PointLightShadows::MAX_BOXES;
+		constants["POINT_SHADOW_MAP_LIGHTS"] = (int)PointLightShadows::MAP_LIGHTS;
+		constants["POINT_SHADOW_MAP_FAR"] = (float)PointLightShadows::MAP_FAR;
 	}
 };
 
@@ -49,6 +52,11 @@ class PointShadowUniformSetter : public IShaderUniformSetter
 	CachedPixelShaderSetting<f32, 3> m_origin{"pointShadowOrigin"};
 	CachedPixelShaderSetting<f32, 3> m_wrap{"pointShadowWrap"};
 	CachedPixelShaderSetting<f32> m_strength{"pointShadowStrength"};
+	CachedPixelShaderSetting<f32> m_entity_mode{"pointShadowEntityMode"};
+	CachedPixelShaderSetting<f32, 12 * PointLightShadows::MAX_BOXES> m_boxes{"pointShadowBoxes"};
+	CachedPixelShaderSetting<f32> m_box_count{"pointShadowBoxCount"};
+	CachedPixelShaderSetting<f32, 4 * PointLightShadows::MAP_LIGHTS> m_map_lights{"pointShadowMapLights"};
+	CachedPixelShaderSetting<f32, 16 * 6> m_map_faces{"pointShadowMapFaces"};
 
 public:
 	void onSetUniforms(video::IMaterialRendererServices *services) override
@@ -60,6 +68,19 @@ public:
 			return;
 		m_origin.set(pls->getOriginScene(), services);
 		m_wrap.set(pls->getWrap(), services);
+
+		using Mode = PointLightShadows::EntityMode;
+		const Mode mode = pls->getEntityMode();
+		f32 mode_f = (f32)mode;
+		m_entity_mode.set(&mode_f, services);
+		if (mode == Mode::Boxes) {
+			m_boxes.set(pls->getEntityBoxes().data(), services);
+			f32 count = pls->getEntityBoxCount();
+			m_box_count.set(&count, services);
+		} else if (mode == Mode::ShadowMaps) {
+			m_map_lights.set(pls->getEntityMapLights().data(), services);
+			m_map_faces.set(pls->getEntityMapFaces().data(), services);
+		}
 	}
 };
 
@@ -92,6 +113,9 @@ std::unique_ptr<PointLightShadows> PointLightShadows::create(Client *client,
 	}
 
 	std::unique_ptr<PointLightShadows> pls(new PointLightShadows(client, driver));
+	pls->m_shsrc = shsrc;
+	// Entities take it into their materials when created
+	pls->createEntityMapTexture();
 	if (!pls->init()) {
 		warningstream << "Point light shadows are not supported, disabling them."
 				<< std::endl;
@@ -113,6 +137,10 @@ PointLightShadows::PointLightShadows(Client *client, video::IVideoDriver *driver
 			settingChangedCallback, this);
 	g_settings->registerChangedCallback("point_light_shadow_strength",
 			settingChangedCallback, this);
+	g_settings->registerChangedCallback("point_light_entity_shadows",
+			settingChangedCallback, this);
+	m_box_rows.assign(12 * MAX_BOXES, 0.0f);
+	m_cell_lit.assign(CELLS * CELLS * CELLS, false);
 }
 
 PointLightShadows::~PointLightShadows()
@@ -122,6 +150,8 @@ PointLightShadows::~PointLightShadows()
 		s_instance = nullptr;
 	if (m_texture)
 		m_driver->removeTexture(m_texture);
+	if (m_entity_map)
+		m_driver->removeTexture(m_entity_map);
 }
 
 bool PointLightShadows::init()
@@ -163,6 +193,16 @@ void PointLightShadows::readSettings()
 {
 	m_enabled = g_settings->getBool("enable_point_light_shadows");
 	m_strength = rangelim(g_settings->getFloat("point_light_shadow_strength"), 0.0f, 1.0f);
+
+	const std::string mode = g_settings->get("point_light_entity_shadows");
+	EntityMode entity_mode = EntityMode::Boxes;
+	if (mode == "none")
+		entity_mode = EntityMode::None;
+	else if (mode == "voxels")
+		entity_mode = EntityMode::Voxels;
+	else if (mode == "shadowmaps")
+		entity_mode = EntityMode::ShadowMaps;
+	setEntityMode(entity_mode);
 }
 
 void PointLightShadows::settingChangedCallback(const std::string &name, void *data)
@@ -200,7 +240,7 @@ const PointLightShadows::ContentInfo &PointLightShadows::getContentInfo(content_
 
 	const ContentFeatures &f = m_ndef->get(c);
 	info.kind = 1;
-	info.light = std::min<u8>(f.light_source, 15);
+	info.light = std::min<u8>(f.light_source, LIGHT_LIMIT);
 	switch (f.drawtype) {
 	case NDT_NORMAL:
 	case NDT_ALLFACES:
@@ -276,6 +316,11 @@ void PointLightShadows::fillSlot(Slot &slot, v3s16 blockpos, v3s16 slot_index)
 	constexpr u32 ROW = 2 * MAP_BLOCKSIZE;
 	m_upload_buffer.assign(ROW * MAP_BLOCKSIZE * MAP_BLOCKSIZE, 0);
 	std::vector<Light> lights;
+	const bool keep_masks = m_entity_mode == EntityMode::Voxels;
+	if (keep_masks)
+		slot.map_masks.assign(MAP_BLOCKSIZE * MAP_BLOCKSIZE * MAP_BLOCKSIZE, 0);
+	else
+		std::vector<u64>().swap(slot.map_masks);
 
 	MapBlock *block = m_client->getEnv().getMap().getBlockNoCreateNoEx(blockpos);
 	if (block) {
@@ -295,9 +340,25 @@ void PointLightShadows::fillSlot(Slot &slot, v3s16 blockpos, v3s16 slot_index)
 			const u64 mask = info.kind == 2 ? getBoxMask(n, p, info) : info.mask;
 			if (mask == 0)
 				continue;
+			if (keep_masks)
+				slot.map_masks[(y * MAP_BLOCKSIZE + z) * MAP_BLOCKSIZE + x] = mask;
 			const u32 i = (y * MAP_BLOCKSIZE + z) * ROW + 2 * x;
 			m_upload_buffer[i] = (u32)mask;
 			m_upload_buffer[i + 1] = (u32)(mask >> 32);
+		}
+	}
+
+	// Entity voxels in the block
+	if (keep_masks && !m_entity_voxels.empty()) {
+		const v3s16 base = blockpos * MAP_BLOCKSIZE;
+		for (const auto &it : m_entity_voxels) {
+			const v3s16 rel = it.first - base;
+			if (rel.X < 0 || rel.Y < 0 || rel.Z < 0 || rel.X >= MAP_BLOCKSIZE ||
+					rel.Y >= MAP_BLOCKSIZE || rel.Z >= MAP_BLOCKSIZE)
+				continue;
+			const u32 i = (rel.Y * MAP_BLOCKSIZE + rel.Z) * ROW + 2 * rel.X;
+			m_upload_buffer[i] |= (u32)it.second;
+			m_upload_buffer[i + 1] |= (u32)(it.second >> 32);
 		}
 	}
 
@@ -376,6 +437,8 @@ void PointLightShadows::update(v3f camera_pos, v3s16 camera_offset)
 
 	if (m_lights_dirty)
 		rebuildLightLists();
+
+	updateEntities(camera_pos);
 }
 
 void PointLightShadows::rebuildLightLists()
@@ -432,6 +495,9 @@ void PointLightShadows::rebuildLightLists()
 			}
 		}
 	}
+
+	for (u32 cell = 0; cell < m_cell_lit.size(); cell++)
+		m_cell_lit[cell] = priority[cell * CELL_LIGHTS] > 0;
 
 	// The entries are in texture memory order
 	m_texture->uploadRegion(0, 0, SIZE, TEX_WIDTH, TEX_HEIGHT, CLUSTER_LAYERS,

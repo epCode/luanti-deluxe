@@ -90,6 +90,11 @@ class GameGlobalShaderUniformSetter : public IShaderUniformSetter
 	CachedPixelShaderSetting<float, 3> m_day_light{"dayLight"};
 	CachedPixelShaderSetting<float> m_block_fade{"blockFade"};
 	CachedPixelShaderSetting<float, 3> m_minimap_yaw{"yawVec"};
+	CachedPixelShaderSetting<float> m_liquid_mask_count{"liquidMaskCount"};
+	CachedPixelShaderSetting<float, 16> m_liquid_masks[ClientEnvironment::MAX_LIQUID_MASKS] = {
+		"liquidMask0", "liquidMask1", "liquidMask2", "liquidMask3",
+		"liquidMask4", "liquidMask5", "liquidMask6", "liquidMask7",
+	};
 	CachedPixelShaderSetting<float, 3> m_camera_offset_pixel{"cameraOffset"};
 	CachedVertexShaderSetting<float, 3> m_camera_offset_vertex{"cameraOffset"};
 	CachedPixelShaderSetting<float, 3> m_camera_position_pixel{"cameraPosition"};
@@ -223,6 +228,13 @@ public:
 		float animation_timer_delta_f = (float)m_client->getEnv().getFrameTimeDelta() / 100000.f;
 		m_animation_timer_delta_vertex.set(&animation_timer_delta_f, services);
 		m_animation_timer_delta_pixel.set(&animation_timer_delta_f, services);
+
+		const std::vector<core::matrix4> &liquid_masks =
+				m_client->getEnv().getLiquidMasks();
+		f32 liquid_mask_count = liquid_masks.size();
+		m_liquid_mask_count.set(&liquid_mask_count, services);
+		for (size_t i = 0; i < liquid_masks.size(); i++)
+			m_liquid_masks[i].set(liquid_masks[i], services);
 
 		if (m_client->getMinimap()) {
 			v3f minimap_yaw = m_client->getMinimap()->getYawVec();
@@ -715,6 +727,7 @@ void Game::run()
 			dtime = 0.0f;
 
 		step(dtime);
+		updateAttachedView(&cam_view, &cam_view_target);
 
 		processClientEvents(&cam_view_target);
 		updateDebugState();
@@ -2283,6 +2296,48 @@ inline void Game::step(f32 dtime)
 		client->step(dtime);
 }
 
+void Game::updateAttachedView(CameraOrientation *cam, CameraOrientation *cam_target)
+{
+	LocalPlayer *player = client->getEnv().getLocalPlayer();
+
+	// The nearest object the player is attached to (directly or through
+	// other objects, e.g. a seat) that turns or limits their view
+	GenericCAO *vehicle = nullptr;
+	for (ClientActiveObject *obj = player->getParent(); obj; obj = obj->getParent()) {
+		auto *cao = dynamic_cast<GenericCAO *>(obj);
+		if (cao && (cao->getProperties().turn_attached_players ||
+				cao->getProperties().attached_player_yaw_limit > 0.0f)) {
+			vehicle = cao;
+			break;
+		}
+	}
+	if (!vehicle) {
+		m_view_vehicle_id = 0;
+		return;
+	}
+
+	const ObjectProperties &prop = vehicle->getProperties();
+	// The shown yaw, so that the view turns exactly like the model
+	f32 yaw = vehicle->getVisualRotation().Y;
+	if (vehicle->getId() == m_view_vehicle_id && prop.turn_attached_players) {
+		f32 delta = wrapDegrees_180(yaw - m_view_vehicle_yaw);
+		cam->camera_yaw += delta;
+		cam_target->camera_yaw += delta;
+	}
+	m_view_vehicle_id = vehicle->getId();
+	m_view_vehicle_yaw = yaw;
+
+	f32 limit = prop.attached_player_yaw_limit;
+	if (limit > 0.0f) {
+		for (CameraOrientation *c : {cam, cam_target}) {
+			f32 rel = wrapDegrees_180(c->camera_yaw - yaw);
+			c->camera_yaw += rangelim(rel, -limit, limit) - rel;
+		}
+	}
+	// Show the new direction in this frame already
+	player->setYaw(cam->camera_yaw);
+}
+
 static void pauseNodeAnimation(PausedNodesList &paused, scene::ISceneNode *node) {
 	if (!node)
 		return;
@@ -3105,8 +3160,8 @@ PointedThing Game::updatePointedThing(
 
 		// Get selection mesh light level
 		MapNode n = map.getNode(p);
-		u16 node_light = getInteriorLight(n, -1, nodedef);
-		u16 light_level = node_light;
+		u32 node_light = getInteriorLight(n, -1, nodedef);
+		u32 light_level = node_light;
 
 		for (const v3s16 &dir : g_6dirs) {
 			n = map.getNode(p + dir);

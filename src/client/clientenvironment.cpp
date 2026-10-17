@@ -22,6 +22,7 @@
 #include "content_cao.h"
 #include "porting.h"
 #include "client/renderingengine.h"
+#include <algorithm>
 
 /*
 	ClientEnvironment
@@ -236,12 +237,12 @@ void ClientEnvironment::step(float dtime)
 
 		// On InvalidPositionException, use this as default
 		// (day: LIGHT_SUN, night: 0)
-		MapNode node_at_lplayer(CONTENT_AIR, 0x0f, 0);
+		MapNode node_at_lplayer(CONTENT_AIR, pack_light(LIGHT_SUN, 0), 0);
 
 		v3s16 p = lplayer->getLightPosition();
 		node_at_lplayer = m_map->getNode(p);
 
-		u16 light = getInteriorLight(node_at_lplayer, 0, m_client->ndef());
+		u32 light = getInteriorLight(node_at_lplayer, 0, m_client->ndef());
 		lplayer->light_color = encode_light(light, 0); // this transfers light.alpha
 		final_color_blend(&lplayer->light_color, light, day_night_ratio);
 
@@ -256,16 +257,35 @@ void ClientEnvironment::step(float dtime)
 		Step active objects and update lighting of them
 	*/
 
+	m_transform_clock.step(dtime);
+
 	bool update_lighting = m_active_object_light_update_interval.step(dtime, 0.21);
-	auto cb_state = [this, dtime, update_lighting, day_night_ratio] (ClientActiveObject *cao) {
+	std::vector<std::pair<f32, core::matrix4>> liquid_masks;
+	const v3f player_pos = lplayer->getPosition();
+	auto cb_state = [this, dtime, update_lighting, day_night_ratio,
+			&liquid_masks, player_pos] (ClientActiveObject *cao) {
 		// Step object
 		cao->step(dtime, this);
+
+		if (cao->getType() == ACTIVEOBJECT_TYPE_GENERIC) {
+			core::matrix4 mask;
+			if (static_cast<GenericCAO *>(cao)->getLiquidMask(mask))
+				liquid_masks.emplace_back(
+						cao->getPosition().getDistanceFromSQ(player_pos), mask);
+		}
 
 		if (update_lighting)
 			cao->updateLight(day_night_ratio);
 	};
 
 	m_ao_manager.step(dtime, cb_state);
+
+	// The nearest liquid masks
+	std::sort(liquid_masks.begin(), liquid_masks.end(),
+			[](const auto &a, const auto &b) { return a.first < b.first; });
+	m_liquid_masks.clear();
+	for (size_t i = 0; i < liquid_masks.size() && i < MAX_LIQUID_MASKS; i++)
+		m_liquid_masks.push_back(liquid_masks[i].second);
 
 	/*
 		Step and handle simple objects

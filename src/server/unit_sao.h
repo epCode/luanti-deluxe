@@ -77,6 +77,7 @@ public:
 	void setAnimationState(const AnimationState &state) override;
 	AnimationState getAnimationState() const override { return m_animation_state; }
 	void swingArm() override { m_pending_swings++; }
+	void entityEvent(u8 id) override { m_pending_entity_events.push_back(id); }
 
 	// Bone position
 	void setBoneOverride(const std::string &bone, const BoneOverride &props) override;
@@ -111,9 +112,15 @@ public:
 	std::string generateStopAnimationCommand(const scene::TrackId &track) const;
 	std::string generateUpdateArmorGroupsCommand() const;
 	std::string generateAnimationStateCommand() const;
+	// server_ms: server time of this update; hold_ms: latest server time at
+	// which the previously sent state was still current (for clients that
+	// interpolate, see object property transform_interpolation)
 	static std::string generateUpdatePositionCommand(const v3f &position,
 			const v3f &velocity, const v3f &acceleration, const v3f &rotation,
-			bool do_interpolate, bool is_movement_end, f32 update_interval);
+			bool do_interpolate, bool is_movement_end, f32 update_interval,
+			u32 server_ms, u32 hold_ms);
+	// Server step time in milliseconds (wraps around)
+	u32 getServerTimeMs() const;
 	std::string generateSetPropertiesCommand(const ObjectProperties &prop) const;
 	static std::string generateUpdateBoneOverrideCommand(
 			const std::string &bone, const BoneOverride &props);
@@ -121,6 +128,9 @@ public:
 
 protected:
 	u16 m_hp = 1;
+
+	// Server time of the last send opportunity for the position
+	u32 m_last_send_opportunity_ms = 0;
 
 	v3f m_rotation;
 	f32 m_rotation_add_yaw = 0;
@@ -138,6 +148,7 @@ protected:
 	AnimationState m_animation_state;
 	bool m_animation_state_sent = true;
 	u16 m_pending_swings = 0;
+	std::vector<u8> m_pending_entity_events;
 
 	object_t m_attachment_parent_id = 0;
 

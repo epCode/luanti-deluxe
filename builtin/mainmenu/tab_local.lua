@@ -18,7 +18,10 @@ local current_port = core.settings:get("port")
 function current_game()
 	local gameid = core.settings:get("menu_last_game")
 	local game = gameid and pkgmgr.find_by_gameid(gameid)
-	-- Fall back to first game installed if one exists.
+	-- Fall back to the default game, else the first game installed if one exists.
+	if not game then
+		game = pkgmgr.find_by_gameid(core.settings:get("default_game"))
+	end
 	if not game and #pkgmgr.games > 0 then
 
 		-- If devtest is the first game in the list and there is another
@@ -31,6 +34,8 @@ function current_game()
 		end
 
 		game = pkgmgr.games[picked_game]
+	end
+	if game and game.id ~= gameid then
 		gameid = game.id
 		core.settings:set("menu_last_game", gameid)
 	end

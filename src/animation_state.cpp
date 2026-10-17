@@ -15,6 +15,10 @@ static const char *item_display_names[AnimationState::ITEM_DISPLAY_COUNT] = {
 	"trident", "spyglass",
 };
 
+static const char *pose_names[AnimationState::POSE_COUNT] = {
+	"standing", "emerging", "digging", "roaring", "sniffing",
+};
+
 void AnimationState::serialize(std::ostream &os) const
 {
 	writeU8(os, 1); // version
@@ -30,6 +34,10 @@ void AnimationState::serialize(std::ostream &os) const
 	writeF32(os, use_duration);
 	writeU8(os, swing_duration);
 	writeF32(os, look_pitch);
+	// Appended fields: older readers stop before them
+	writeU8(os, pose);
+	writeU16(os, anger);
+	writeF32(os, head_yaw);
 }
 
 void AnimationState::deSerialize(std::istream &is)
@@ -60,6 +68,13 @@ void AnimationState::deSerialize(std::istream &is)
 	use_duration = readF32(is);
 	swing_duration = readU8(is);
 	look_pitch = readF32(is);
+	// Older writers end here
+	if (!canRead(is))
+		return;
+	u8 p = readU8(is);
+	this->pose = p < POSE_COUNT ? static_cast<Pose>(p) : POSE_STANDING;
+	anger = readU16(is);
+	head_yaw = readF32(is);
 }
 
 const char *AnimationState::armPoseName(ArmPose pose)
@@ -86,4 +101,17 @@ AnimationState::ArmPose AnimationState::armPoseFromName(std::string_view name)
 		if (name == arm_pose_names[i])
 			return static_cast<ArmPose>(i);
 	return ARM_POSE_COUNT;
+}
+
+const char *AnimationState::poseName(Pose pose)
+{
+	return pose < POSE_COUNT ? pose_names[pose] : "standing";
+}
+
+AnimationState::Pose AnimationState::poseFromName(std::string_view name)
+{
+	for (u8 i = 0; i < POSE_COUNT; i++)
+		if (name == pose_names[i])
+			return static_cast<Pose>(i);
+	return POSE_COUNT;
 }

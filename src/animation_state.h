@@ -42,6 +42,17 @@ struct AnimationState
 		ITEM_DISPLAY_COUNT
 	};
 
+	/// Minecraft's entity Pose, as far as procedural animations use it
+	/// ("minecraft_warden": a change starts the matching animation)
+	enum Pose : u8 {
+		POSE_STANDING,
+		POSE_EMERGING,
+		POSE_DIGGING,
+		POSE_ROARING,
+		POSE_SNIFFING,
+		POSE_COUNT
+	};
+
 	bool sneaking = false;
 	bool riding = false;
 	bool sleeping = false;
@@ -68,6 +79,11 @@ struct AnimationState
 	u8 swing_duration = 6;
 	/// Look pitch in radians (players: set by the engine)
 	f32 look_pitch = 0.0f;
+	Pose pose = POSE_STANDING;
+	/// Anger level (Minecraft's warden: 0 to 150, the heartbeat speeds up to 80)
+	u16 anger = 0;
+	/// Head yaw relative to the object's yaw, radians (Luanti convention)
+	f32 head_yaw = 0.0f;
 
 	void serialize(std::ostream &os) const;
 	void deSerialize(std::istream &is);
@@ -78,6 +94,9 @@ struct AnimationState
 	static const char *itemDisplayName(ItemDisplay display);
 	/// Returns ITEM_DISPLAY_COUNT for unknown names
 	static ItemDisplay itemDisplayFromName(std::string_view name);
+	static const char *poseName(Pose pose);
+	/// Returns POSE_COUNT for unknown names
+	static Pose poseFromName(std::string_view name);
 
 	bool operator==(const AnimationState &o) const
 	{
@@ -89,6 +108,7 @@ struct AnimationState
 				left_arm == o.left_arm && right_item == o.right_item &&
 				left_item == o.left_item && sleep_yaw == o.sleep_yaw &&
 				use_duration == o.use_duration &&
-				swing_duration == o.swing_duration && look_pitch == o.look_pitch;
+				swing_duration == o.swing_duration && look_pitch == o.look_pitch &&
+				pose == o.pose && anger == o.anger && head_yaw == o.head_yaw;
 	}
 };

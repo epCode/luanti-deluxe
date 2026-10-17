@@ -741,7 +741,9 @@ u8 ServerEnvironment::findSunlight(v3s16 pos) const
 
 			// Sunlight could have come from here
 			dists[neighborHash] = dist;
-			u8 daylight = node.param1 & 0x0f;
+			// Natural light is at most LIGHT_SUN_LEVEL
+			u8 daylight = MYMIN(light_level(unpack_light_day(node.param1)),
+				LIGHT_SUN_LEVEL);
 
 			// In the special case where sunlight shines from above and thus
 			// does not decrease with upwards distance, daylight is always
@@ -753,8 +755,8 @@ u8 ServerEnvironment::findSunlight(v3s16 pos) const
 				continue;
 			}
 
-			u8 nightlight = node.param1 >> 4;
-			if (daylight > nightlight) {
+			u8 nightlight = unpack_light_night(node.param1);
+			if (unpack_light_day(node.param1) > nightlight) {
 				// Found a valid daylight
 				found_light = possible_finlight;
 			} else {
@@ -883,6 +885,8 @@ void ServerEnvironment::step(float dtime)
 {
 	ScopeProfiler sp2(g_profiler, "ServerEnv::step()", SPT_AVG);
 	const auto start_time = porting::getTimeUs();
+
+	m_sim_time += dtime;
 
 	/* Step time of day */
 	stepTimeOfDay(dtime);

@@ -329,12 +329,13 @@ private:
  * You have to multiply the resulting color
  * with the node's color.
  *
- * \param light the first 8 bits are day light,
- * the last 8 bits are night light
+ * \param light the low 16 bits are day light,
+ * the high 16 bits are night light, each 0..LIGHT_HDR_MAX
+ * (decode_light_hdr(); above 255 is brighter than the classic maximum)
  * \param emissive_light amount of light the surface emits,
- * from 0 to LIGHT_SUN.
+ * from 0 to LIGHT_LIMIT.
  */
-video::SColor encode_light(u16 light, u8 emissive_light);
+video::SColor encode_light(u32 light, u8 emissive_light);
 
 /*!
  * Sets up a vertex for lightmap lighting.
@@ -345,10 +346,12 @@ video::SColor encode_light(u16 light, u8 emissive_light);
 void lightmap_set_vertex(video::S3DVertex &vertex, u8 gray, s32 block, s32 sky);
 
 // Compute light at node
-u16 getInteriorLight(MapNode n, s32 increment, const NodeDefManager *ndef);
-u16 getFaceLight(MapNode n, MapNode n2, const NodeDefManager *ndef);
-u16 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &corner, MeshMakeData *data);
-u16 getSmoothLightTransparent(const v3s16 &p, const v3s16 &corner, MeshMakeData *data);
+// Results have day light in the low 16 bits and night light in the high
+// 16 bits, see encode_light()
+u32 getInteriorLight(MapNode n, s32 increment, const NodeDefManager *ndef);
+u32 getFaceLight(MapNode n, MapNode n2, const NodeDefManager *ndef);
+u32 getSmoothLightSolid(const v3s16 &p, const v3s16 &face_dir, const v3s16 &corner, MeshMakeData *data);
+u32 getSmoothLightTransparent(const v3s16 &p, const v3s16 &corner, MeshMakeData *data);
 
 /*!
  * Returns the sunlight's color from the current
@@ -360,11 +363,10 @@ void get_sunlight_color(video::SColorf *sunlight, u32 daynight_ratio);
  * Gives the final  SColor shown on screen.
  *
  * \param result output color
- * \param light first 8 bits are day light, second 8 bits are
- * night light
+ * \param light day and night light, see encode_light()
  */
 void final_color_blend(video::SColor *result,
-		u16 light, u32 daynight_ratio);
+		u32 light, u32 daynight_ratio);
 
 /*!
  * Gives the final  SColor shown on screen.
