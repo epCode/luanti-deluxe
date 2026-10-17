@@ -23,14 +23,16 @@ local function temple_placement_callback(pos,def, pr)
 	-- Initialize pressure plates and randomly remove up to 5 plates
 	local pplates = core.find_nodes_in_area(p1, p2, "mcl_pressureplates:pressure_plate_stone_off")
 	local pplates_remove = 5
+	-- Pressure plates without on_construct (the redstone port) need no setup
+	local pplate_construct = core.registered_nodes["mcl_pressureplates:pressure_plate_stone_off"].on_construct
 	for p=1, #pplates do
 		if pplates_remove > 0 and pr:next(1, 100) >= 50 then
 			-- Remove plate
 			core.remove_node(pplates[p])
 			pplates_remove = pplates_remove - 1
-		else
+		elseif pplate_construct then
 			-- Initialize plate
-			core.registered_nodes["mcl_pressureplates:pressure_plate_stone_off"].on_construct(pplates[p])
+			pplate_construct(pplates[p])
 		end
 	end
 	if core.registered_nodes["mcl_sus_nodes:sand"] then

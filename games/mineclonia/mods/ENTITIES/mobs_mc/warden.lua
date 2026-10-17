@@ -419,7 +419,11 @@ local function set_pose(self, pose)
 end
 
 local function entity_event(self, id)
-	self.object:entity_event(id)
+	-- Engines without Minecraft entity events (ObjectRef:entity_event)
+	-- just don't show the animation
+	if self.object.entity_event then
+		self.object:entity_event(id)
+	end
 end
 
 ------------------------------------------------------------------------
