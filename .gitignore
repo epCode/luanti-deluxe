@@ -62,11 +62,6 @@ AppDir
 /games/*
 !/games/devtest/
 !/games/mineclonia/
-# Mineclonia: Minecraft assets generated locally (Mojang assets, do not distribute)
-/games/mineclonia/textures/
-/games/mineclonia/mods/MAPGEN/mcl_levelgen/templates/ancient_city/
-/games/mineclonia/mods/ITEMS/mcl_sculk/models/*.obj
-/games/mineclonia/mods/ENTITIES/mobs_mc/models/mobs_mc_warden.glb
 /games/devtest/mods/soundstuff/sounds/gitignored_sounds/*
 !/games/devtest/mods/soundstuff/sounds/gitignored_sounds/custom_sounds_here.txt
 /cache
